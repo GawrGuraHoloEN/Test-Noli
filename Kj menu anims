@@ -1,10 +1,5 @@
--- LocalScript: place in StarterPlayer > StarterPlayerScripts
--- Movable animation/sound menu with scrolling list
--- Spawn animation priority: stops other animations until it finishes or the player moves.
-
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -12,29 +7,389 @@ local currentTracks = {}
 local currentSounds = {}
 local sequence = 0
 
-local spawnTrack = nil
-local spawnSound = nil
-local spawnActive = false
-local spawnAnimationConnection = nil
-local spawnHeartbeatConnection = nil
-local movementConnection = nil
-
-local SPAWN_ANIMATION_ID = "17325160621"
-local SPAWN_SOUND_ID = "17325174223"
-
-local function disconnect(connection)
-	if connection then
-		connection:Disconnect()
-	end
-	return nil
-end
-
 local function getCharacter()
 	local character = player.Character or player.CharacterAdded:Wait()
-
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 		or character:WaitForChild("Humanoid")
 
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	return character, humanoid, animator
+end
+
+local function getTorso(character)
+	return character:FindFirstChild("Torso")
+		or character:FindFirstChild("UpperTorso")
+		or character:FindFirstChild("HumanoidRootPart")
+		or character
+end
+
+local function stopCurrent()
+	sequence += 1
+
+	for _, track in ipairs(currentTracks) do
+		if track.IsPlaying then
+			track:Stop(0.15)
+		end
+	end
+
+	table.clear(currentTracks)
+
+	for _, sound in ipairs(currentSounds) do
+		if sound then
+			sound:Stop()
+			sound:Destroy()
+		end
+	end
+
+	table.clear(currentSounds)
+end
+
+local function playAnimation(id)
+	local _, _, animator = getCharacter()
+
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "rbxassetid://" .. id
+
+	local track = animator:LoadAnimation(animation)
+	animation:Destroy()
+
+	track:Play(0.15)
+	table.insert(currentTracks, track)
+
+	return track
+end
+
+local function playSound(id, delayTime, token)
+	task.delay(delayTime or 0, function()
+		if token ~= sequence then
+			return
+		end
+
+		local character = getCharacter()
+		local torso = getTorso(character)
+
+		local sound = Instance.new("Sound")
+		sound.SoundId = "rbxassetid://" .. id
+		sound.Volume = 1
+		sound.Parent = torso
+
+		table.insert(currentSounds, sound)
+
+		sound.Ended:Connect(function()
+			if sound then
+				sound:Destroy()
+			end
+		end)
+
+		sound:Play()
+	end)
+end
+
+local moves = {}
+local moveOrder = {}
+
+local function addMove(name, callback)
+	moves[name] = callback
+	table.insert(moveOrder, name)
+end
+
+-- Unlimited Flex Works
+addMove("Unlimited Flex Works", function(token)
+	playAnimation("77727115892579")
+
+	playSound("95410275491981", 0.2, token)
+	playSound("128136381213631", 0, token)
+	playSound("99126314241685", 0, token)
+end)
+
+-- Five Seasons
+addMove("Five Seasons", function(token)
+	playAnimation("18462892217")
+
+	playSound("18460952794", 0, token)
+	playSound("18460863844", 0, token)
+	playSound("18460893321", 3.5, token)
+	playSound("18461671633", 7.5, token)
+
+	task.delay(12.5, function()
+		if token ~= sequence then
+			return
+		end
+
+		stopCurrent()
+
+		local newToken = sequence
+
+		playAnimation("18462894593")
+		playSound("18461821277", 0, newToken)
+		playSound("18462018744", 1.5, newToken)
+		playSound("18462312002", 3.5, newToken)
+		playSound("18462330981", 5.2, newToken)
+	end)
+end)
+
+-- Ravage Startup
+addMove("Ravage Startup", function(token)
+	playAnimation("16945573694")
+	playSound("16945495411", 0, token)
+end)
+
+-- Ravage Hit
+addMove("Ravage Hit", function(token)
+	playAnimation("16945550029")
+
+	playSound("16945691441", 0, token)
+	playSound("16945593216", 0, token)
+	playSound("16945517708", 0, token)
+	playSound("16945723339", 2, token)
+end)
+
+-- Ravage Victim
+addMove("Ravage Victim", function(token)
+	playAnimation("16945557433")
+
+	playSound("16945691441", 0, token)
+	playSound("16945593216", 0, token)
+	playSound("16945517708", 0, token)
+	playSound("16945723339", 2, token)
+end)
+
+-- 20-20-20 Dropkick
+addMove("20-20-20 Dropkick", function(token)
+	playAnimation("17354976067")
+
+	playSound("17356346310", 0, token)
+	playSound("17429233290", 0, token)
+end)
+
+-- 20 Series
+addMove("20 Series", function(token)
+	playAnimation("17140902079")
+
+	playSound("17150550559", 0, token)
+	playSound("17150550302", 0, token)
+end)
+
+-- 20 Series Alt
+addMove("20 Series Alt", function(token)
+	playAnimation("18445236460")
+
+	playSound("18445228136", 0, token)
+	playSound("18445228824", 0, token)
+	playSound("18445227792", 0, token)
+end)
+
+-- Swift Sweep
+addMove("Swift Sweep", function(token)
+	playAnimation("16944265635")
+	playSound("16944636115", 0, token)
+end)
+
+-- Swift Sweep Kick
+addMove("Swift Sweep Kick", function(token)
+	playAnimation("16944345619")
+	playSound("16944654440", 0.1, token)
+end)
+
+-- Stoic Bomb
+addMove("Stoic Bomb", function(token)
+	playAnimation("17141153099")
+
+	playSound("17141392513", 0, token)
+	playSound("17141392976", 1, token)
+	playSound("17141392676", 2, token)
+	playSound("17141392854", 3.5, token)
+end)
+
+-- Collateral Ruin
+addMove("Collateral Ruin", function(token)
+	playAnimation("17325254223")
+
+	playSound("74376324560435", 0, token)
+	playSound("72000489811842", 1.5, token)
+end)
+
+-- Dropkick hit
+addMove("Dropkick hit", function(token)
+	playAnimation("17420452843")
+
+	playSound("17363374089", 0, token)
+	playSound("17363383992", 0, token)
+end)
+
+-- Wall Combo
+addMove("Wall Combo", function(token)
+	playAnimation("18447913645")
+
+	playSound("18443048724", 0, token)
+	playSound("18443049348", 0, token)
+	playSound("18443813318", 5.9, token)
+end)
+
+-- GUI ------------------------------------------------------------------------
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AnimationSoundMenu"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local openButton = Instance.new("TextButton")
+openButton.Name = "OpenButton"
+openButton.Size = UDim2.fromOffset(115, 36)
+openButton.Position = UDim2.new(0, 18, 0.5, -18)
+openButton.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+openButton.TextColor3 = Color3.new(1, 1, 1)
+openButton.Text = "Animations"
+openButton.TextSize = 14
+openButton.Font = Enum.Font.Gotham
+openButton.Parent = gui
+
+local openCorner = Instance.new("UICorner")
+openCorner.CornerRadius = UDim.new(0, 8)
+openCorner.Parent = openButton
+
+local frame = Instance.new("Frame")
+frame.Name = "Menu"
+frame.Size = UDim2.fromOffset(240, 350)
+frame.Position = UDim2.new(0, 18, 0.5, 25)
+frame.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+frame.Visible = false
+frame.ClipsDescendants = true
+frame.Parent = gui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 10)
+frameCorner.Parent = frame
+
+local header = Instance.new("TextLabel")
+header.Name = "DragHeader"
+header.Size = UDim2.new(1, -16, 0, 38)
+header.Position = UDim2.fromOffset(8, 4)
+header.BackgroundTransparency = 1
+header.Text = "Animation Menu  •  Drag Here"
+header.TextColor3 = Color3.new(1, 1, 1)
+header.TextSize = 15
+header.Font = Enum.Font.GothamBold
+header.Active = true
+header.Parent = frame
+
+local scrollingFrame = Instance.new("ScrollingFrame")
+scrollingFrame.Name = "AnimationList"
+scrollingFrame.Size = UDim2.new(1, -16, 1, -52)
+scrollingFrame.Position = UDim2.fromOffset(8, 46)
+scrollingFrame.BackgroundColor3 = Color3.fromRGB(17, 17, 24)
+scrollingFrame.BackgroundTransparency = 0.15
+scrollingFrame.BorderSizePixel = 0
+scrollingFrame.ScrollBarThickness = 7
+scrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(110, 110, 130)
+scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+scrollingFrame.ClipsDescendants = true
+scrollingFrame.Parent = frame
+
+local scrollCorner = Instance.new("UICorner")
+scrollCorner.CornerRadius = UDim.new(0, 7)
+scrollCorner.Parent = scrollingFrame
+
+local padding = Instance.new("UIPadding")
+padding.PaddingTop = UDim.new(0, 7)
+padding.PaddingBottom = UDim.new(0, 7)
+padding.PaddingLeft = UDim.new(0, 7)
+padding.PaddingRight = UDim.new(0, 7)
+padding.Parent = scrollingFrame
+
+local list = Instance.new("UIListLayout")
+list.Padding = UDim.new(0, 6)
+list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+list.SortOrder = Enum.SortOrder.LayoutOrder
+list.Parent = scrollingFrame
+
+for order, name in ipairs(moveOrder) do
+	local callback = moves[name]
+
+	local button = Instance.new("TextButton")
+	button.Name = name:gsub("%W", "")
+	button.Size = UDim2.new(1, -2, 0, 34)
+	button.BackgroundColor3 = Color3.fromRGB(48, 48, 62)
+	button.TextColor3 = Color3.new(1, 1, 1)
+	button.Text = name
+	button.TextSize = 13
+	button.Font = Enum.Font.Gotham
+	button.LayoutOrder = order
+	button.AutoButtonColor = true
+	button.Parent = scrollingFrame
+
+	local buttonCorner = Instance.new("UICorner")
+	buttonCorner.CornerRadius = UDim.new(0, 6)
+	buttonCorner.Parent = button
+
+	button.Activated:Connect(function()
+		stopCurrent()
+		callback(sequence)
+	end)
+end
+
+-- Movable menu --------------------------------------------------------------
+
+local dragging = false
+local dragStart
+local startPosition
+
+local function updateDrag(input)
+	local delta = input.Position - dragStart
+
+	local camera = workspace.CurrentCamera
+	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+	local menuSize = frame.AbsoluteSize
+
+	local maxX = math.max(0, viewport.X - menuSize.X)
+	local maxY = math.max(0, viewport.Y - menuSize.Y)
+
+	local newX = math.clamp(startPosition.X.Offset + delta.X, 0, maxX)
+	local newY = math.clamp(startPosition.Y.Offset + delta.Y, 0, maxY)
+
+	frame.Position = UDim2.fromOffset(newX, newY)
+end
+
+header.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		dragging = true
+		dragStart = input.Position
+		startPosition = frame.Position
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not dragging then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+		updateDrag(input)
+	end
+end)
+
+openButton.Activated:Connect(function()
+	frame.Visible = not frame.Visible
+end)
+
+player.CharacterRemoving:Connect(stopCurrent)
 	local animator = humanoid:FindFirstChildOfClass("Animator")
 
 	if not animator then
