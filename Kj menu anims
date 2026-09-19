@@ -7,7 +7,11 @@ local player = Players.LocalPlayer
 
 local currentTracks = {}
 local currentSounds = {}
+local movementConnection
 local sequence = 0
+
+local SPAWN_ANIMATION_ID = "17325160621"
+local SPAWN_SOUND_ID = "17325174223"
 
 local function getCharacter()
     local character = player.Character or player.CharacterAdded:Wait()
@@ -60,6 +64,51 @@ local function playSound(id, delayTime, token)
             sound:Destroy()
         end)
         sound:Play()
+    end)
+end
+
+-- Plays the spawn animation and sound. Every track on the newly spawned
+-- character is stopped first so the spawn animation takes priority.
+local function playSpawnAnimation(character)
+    if movementConnection then
+        movementConnection:Disconnect()
+        movementConnection = nil
+    end
+
+    stopCurrent()
+
+    local humanoid = character:WaitForChild("Humanoid")
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+
+    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+        track:Stop(0.15)
+    end
+
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://" .. SPAWN_ANIMATION_ID
+    local track = animator:LoadAnimation(animation)
+    animation:Destroy()
+    track:Play(0.15)
+    table.insert(currentTracks, track)
+
+    local token = sequence
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://" .. SPAWN_SOUND_ID
+    sound.Volume = 1
+    sound.Parent = character:FindFirstChild("HumanoidRootPart") or character
+    table.insert(currentSounds, sound)
+    sound.Ended:Connect(function()
+        sound:Destroy()
+    end)
+    sound:Play()
+
+    -- Stop both the spawn animation and its sound as soon as the player moves.
+    movementConnection = humanoid.Running:Connect(function(speed)
+        if speed > 0 and token == sequence then
+            stopCurrent()
+            movementConnection:Disconnect()
+            movementConnection = nil
+        end
     end)
 end
 
@@ -205,4 +254,16 @@ openButton.Activated:Connect(function()
     frame.Visible = not frame.Visible
 end)
 
-player.CharacterRemoving:Connect(stopCurrent)
+player.CharacterRemoving:Connect(function()
+    if movementConnection then
+        movementConnection:Disconnect()
+        movementConnection = nil
+    end
+    stopCurrent()
+end)
+
+player.CharacterAdded:Connect(playSpawnAnimation)
+
+if player.Character then
+    task.defer(playSpawnAnimation, player.Character)
+end
