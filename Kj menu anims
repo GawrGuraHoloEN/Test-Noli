@@ -8,6 +8,7 @@ local player = Players.LocalPlayer
 local currentTracks = {}
 local currentSounds = {}
 local movementConnection
+local spawnAnimationConnection
 local sequence = 0
 
 local SPAWN_ANIMATION_ID = "17325160621"
@@ -22,6 +23,11 @@ end
 
 local function stopCurrent()
     sequence += 1
+
+    if spawnAnimationConnection then
+        spawnAnimationConnection:Disconnect()
+        spawnAnimationConnection = nil
+    end
 
     for _, track in ipairs(currentTracks) do
         if track.IsPlaying then
@@ -69,6 +75,7 @@ end
 
 -- Plays the spawn animation and sound. Existing tracks are stopped first,
 -- then the script waits briefly before starting the new animation and sound.
+-- Any animation started while the spawn animation is playing is stopped.
 local function playSpawnAnimation(character)
     if movementConnection then
         movementConnection:Disconnect()
@@ -98,6 +105,15 @@ local function playSpawnAnimation(character)
     animation.AnimationId = "rbxassetid://" .. SPAWN_ANIMATION_ID
     local track = animator:LoadAnimation(animation)
     animation:Destroy()
+
+    -- Install the guard before playing the spawn track so animations from the
+    -- default Animate script or other scripts cannot play alongside it.
+    spawnAnimationConnection = animator.AnimationPlayed:Connect(function(otherTrack)
+        if otherTrack ~= track and otherTrack.IsPlaying then
+            otherTrack:Stop(0.15)
+        end
+    end)
+
     track:Play(0.15)
     table.insert(currentTracks, track)
 
@@ -117,6 +133,14 @@ local function playSpawnAnimation(character)
             stopCurrent()
             movementConnection:Disconnect()
             movementConnection = nil
+        end
+    end)
+
+    -- Remove the guard when the spawn animation naturally ends.
+    track.Stopped:Connect(function()
+        if spawnAnimationConnection then
+            spawnAnimationConnection:Disconnect()
+            spawnAnimationConnection = nil
         end
     end)
 end
