@@ -1,7 +1,6 @@
 -- LocalScript: place in StarterPlayer > StarterPlayerScripts
--- Movable animation/sound menu with scrolling list
--- Spawn animation priority: the spawn animation always stops other animations
--- until it finishes or the player moves.
+-- Movable animation/sound menu with scrolling list.
+-- The spawn animation has priority until it finishes or the player moves.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -51,7 +50,7 @@ local function disconnectConnection(connection)
 end
 
 local function stopCurrent(force)
-	-- Menu animations cannot interrupt the spawn animation unless force is true.
+	-- Menu animations cannot interrupt the spawn animation unless forced.
 	if spawnActive and not force then
 		return false
 	end
@@ -136,9 +135,22 @@ local function playSpawnAnimation(character)
 	local animator = humanoid:FindFirstChildOfClass("Animator")
 		or Instance.new("Animator", humanoid)
 
+	-- Stop all previous animations and sounds first.
 	stopCurrent(true)
 
-	-- Stop any animation currently playing on the new character.
+	-- Block menu animations during the preparation delay.
+	spawnActive = true
+
+	-- Give Roblox 0.3 seconds to finish stopping previous tracks.
+	task.wait(0.3)
+
+	-- Make sure the character was not replaced during the delay.
+	if character ~= player.Character then
+		spawnActive = false
+		return
+	end
+
+	-- Stop anything that may have started during the delay.
 	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
 		track:Stop(0.15)
 	end
@@ -154,7 +166,7 @@ local function playSpawnAnimation(character)
 
 	local token = sequence
 
-	-- If another animation starts while the spawn animation is active, stop it.
+	-- Stop every other animation while the spawn animation is active.
 	spawnAnimationConnection = animator.AnimationPlayed:Connect(function(otherTrack)
 		if spawnActive and otherTrack ~= spawnTrack and otherTrack.IsPlaying then
 			otherTrack:Stop(0.15)
@@ -164,12 +176,11 @@ local function playSpawnAnimation(character)
 	track:Play(0.15)
 	table.insert(currentTracks, track)
 
-	-- Play spawn sound from torso/root.
-	local torso = getTorso(character)
+	-- Play the spawn sound from the player's torso.
 	local sound = Instance.new("Sound")
 	sound.SoundId = "rbxassetid://" .. SPAWN_SOUND_ID
 	sound.Volume = 1
-	sound.Parent = torso
+	sound.Parent = getTorso(character)
 
 	table.insert(currentSounds, sound)
 
@@ -188,13 +199,17 @@ local function playSpawnAnimation(character)
 		end
 	end)
 
+	-- Unlock the menu after the spawn animation finishes.
 	track.Stopped:Connect(function()
 		if spawnTrack == track then
 			spawnTrack = nil
 			spawnActive = false
 
-			spawnAnimationConnection = disconnectConnection(spawnAnimationConnection)
-			movementConnection = disconnectConnection(movementConnection)
+			spawnAnimationConnection =
+				disconnectConnection(spawnAnimationConnection)
+
+			movementConnection =
+				disconnectConnection(movementConnection)
 		end
 	end)
 end
@@ -210,7 +225,6 @@ end
 -- Unlimited Flex Works
 addMove("Unlimited Flex Works", function(token)
 	playAnimation("77727115892579")
-
 	playSound("95410275491981", 0.2, token)
 	playSound("128136381213631", 0, token)
 	playSound("99126314241685", 0, token)
@@ -439,6 +453,7 @@ for order, name in ipairs(moveOrder) do
 	buttonCorner.Parent = button
 
 	button.Activated:Connect(function()
+		-- Do not allow menu animations to interrupt spawn animation.
 		if spawnActive then
 			return
 		end
@@ -511,6 +526,7 @@ player.CharacterAdded:Connect(function(character)
 	playSpawnAnimation(character)
 end)
 
+-- Play the spawn animation for the current character.
 if player.Character then
 	task.defer(playSpawnAnimation, player.Character)
 end
