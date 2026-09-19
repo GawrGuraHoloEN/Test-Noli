@@ -67,8 +67,8 @@ local function playSound(id, delayTime, token)
     end)
 end
 
--- Plays the spawn animation and sound. Every track on the newly spawned
--- character is stopped first so the spawn animation takes priority.
+-- Plays the spawn animation and sound. Existing tracks are stopped first,
+-- then the script waits briefly before starting the new animation and sound.
 local function playSpawnAnimation(character)
     if movementConnection then
         movementConnection:Disconnect()
@@ -76,10 +76,20 @@ local function playSpawnAnimation(character)
     end
 
     stopCurrent()
+    local token = sequence
+
+    -- Give previously playing animations time to finish stopping.
+    task.wait(0.1)
+
+    -- Do not start the spawn animation if another action happened during the wait.
+    if token ~= sequence or character ~= player.Character then
+        return
+    end
 
     local humanoid = character:WaitForChild("Humanoid")
     local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
 
+    -- Stop any tracks that may have been started during the short wait.
     for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
         track:Stop(0.15)
     end
@@ -91,7 +101,6 @@ local function playSpawnAnimation(character)
     track:Play(0.15)
     table.insert(currentTracks, track)
 
-    local token = sequence
     local sound = Instance.new("Sound")
     sound.SoundId = "rbxassetid://" .. SPAWN_SOUND_ID
     sound.Volume = 1
