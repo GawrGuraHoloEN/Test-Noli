@@ -1,4 +1,7 @@
 -- LocalScript: place in StarterPlayer > StarterPlayerScripts
+-- Movable animation/sound menu with scrolling list
+-- Spawn animation priority: the spawn animation always stops other animations
+-- until it finishes or the player moves.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -9,10 +12,10 @@ local currentTracks = {}
 local currentSounds = {}
 local sequence = 0
 
-local spawnTrack
+local spawnTrack = nil
 local spawnActive = false
-local spawnAnimationConnection
-local movementConnection
+local spawnAnimationConnection = nil
+local movementConnection = nil
 
 local SPAWN_ANIMATION_ID = "17325160621"
 local SPAWN_SOUND_ID = "17325174223"
@@ -131,16 +134,11 @@ local function playSpawnAnimation(character)
 		or character:WaitForChild("Humanoid")
 
 	local animator = humanoid:FindFirstChildOfClass("Animator")
+		or Instance.new("Animator", humanoid)
 
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = humanoid
-	end
-
-	-- Stop all animations and sounds left from before respawning.
 	stopCurrent(true)
 
-	-- Stop any animation already playing on the new character.
+	-- Stop any animation currently playing on the new character.
 	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
 		track:Stop(0.15)
 	end
@@ -156,9 +154,9 @@ local function playSpawnAnimation(character)
 
 	local token = sequence
 
-	-- While the spawn animation is active, stop any other animation.
+	-- If another animation starts while the spawn animation is active, stop it.
 	spawnAnimationConnection = animator.AnimationPlayed:Connect(function(otherTrack)
-		if spawnActive and otherTrack ~= spawnTrack then
+		if spawnActive and otherTrack ~= spawnTrack and otherTrack.IsPlaying then
 			otherTrack:Stop(0.15)
 		end
 	end)
@@ -166,7 +164,7 @@ local function playSpawnAnimation(character)
 	track:Play(0.15)
 	table.insert(currentTracks, track)
 
-	-- Play the spawn sound from the player's torso.
+	-- Play spawn sound from torso/root.
 	local torso = getTorso(character)
 	local sound = Instance.new("Sound")
 	sound.SoundId = "rbxassetid://" .. SPAWN_SOUND_ID
@@ -183,23 +181,21 @@ local function playSpawnAnimation(character)
 
 	sound:Play()
 
-	-- Movement cancels both the spawn animation and its sound.
+	-- Moving cancels the spawn animation and sound.
 	movementConnection = humanoid.Running:Connect(function(speed)
 		if spawnActive and speed > 0.1 and token == sequence then
 			stopCurrent(true)
 		end
 	end)
 
-	-- Allow other animations after the spawn animation finishes normally.
 	track.Stopped:Connect(function()
-		if spawnTrack ~= track then
-			return
-		end
+		if spawnTrack == track then
+			spawnTrack = nil
+			spawnActive = false
 
-		spawnTrack = nil
-		spawnActive = false
-		spawnAnimationConnection = disconnectConnection(spawnAnimationConnection)
-		movementConnection = disconnectConnection(movementConnection)
+			spawnAnimationConnection = disconnectConnection(spawnAnimationConnection)
+			movementConnection = disconnectConnection(movementConnection)
+		end
 	end)
 end
 
@@ -443,7 +439,6 @@ for order, name in ipairs(moveOrder) do
 	buttonCorner.Parent = button
 
 	button.Activated:Connect(function()
-		-- The spawn animation has priority until it finishes or movement cancels it.
 		if spawnActive then
 			return
 		end
@@ -516,7 +511,6 @@ player.CharacterAdded:Connect(function(character)
 	playSpawnAnimation(character)
 end)
 
--- Play the spawn animation for the current character too.
 if player.Character then
 	task.defer(playSpawnAnimation, player.Character)
 end
