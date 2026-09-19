@@ -597,7 +597,7 @@ openButton.Activated:Connect(function()
 	frame.Visible = not frame.Visible
 end)
 
--- Respawn-safe activation -----------------------------------------------------
+-- Respawn-safe activation ----------------------------------------------------
 
 player.CharacterRemoving:Connect(function()
 	stopCurrent(true)
