@@ -1,5 +1,5 @@
 -- LocalScript: place in StarterPlayer > StarterPlayerScripts
--- Full animation/sound menu + spawn lock + replacement detection
+-- Full animation/sound menu + spawn lock + respawn-safe replacement detection
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -73,7 +73,6 @@ local function stopSound(sound)
 end
 
 local function stopCurrent(force)
-	-- Normal menu actions cannot interrupt the spawn animation.
 	if spawnActive and not force then
 		return false
 	end
@@ -83,6 +82,7 @@ local function stopCurrent(force)
 	spawnAnimationConnection = disconnect(spawnAnimationConnection)
 	spawnHeartbeatConnection = disconnect(spawnHeartbeatConnection)
 	movementConnection = disconnect(movementConnection)
+	animationReplacementConnection = disconnect(animationReplacementConnection)
 
 	spawnActive = false
 	spawnTrack = nil
@@ -168,22 +168,19 @@ local function setupAnimationReplacement(character)
 			return
 		end
 
-		local animId = tonumber(string.match(animationTrack.Animation.AnimationId, "%d+"))
-		local replacementId = REPLACEMENTS[animId]
+		local animationId = tonumber(string.match(animationTrack.Animation.AnimationId, "%d+"))
+		local replacementId = REPLACEMENTS[animationId]
 
 		if not replacementId then
 			return
 		end
 
-		-- Always stop the original animation first.
 		animationTrack:Stop(0)
 
-		-- If the character changed, ignore.
 		if character ~= player.Character then
 			return
 		end
 
-		-- Replace it with the correct animation.
 		local replacementAnimation = Instance.new("Animation")
 		replacementAnimation.AnimationId = "rbxassetid://" .. tostring(replacementId)
 
@@ -210,20 +207,17 @@ local function playSpawnAnimation(character)
 		animator.Parent = humanoid
 	end
 
-	-- Stop any previous state before spawn starts.
 	stopCurrent(true)
 
 	spawnActive = true
 	local spawnToken = sequence
 
-	-- Try to stop any new animation on this char while the spawn lock is active.
 	spawnAnimationConnection = animator.AnimationPlayed:Connect(function(track)
 		if spawnActive and track ~= spawnTrack and track.IsPlaying then
 			track:Stop(0.15)
 		end
 	end)
 
-	-- Continuous lock: stop everything except spawn track while active.
 	spawnHeartbeatConnection = RunService.Heartbeat:Connect(function()
 		if not spawnActive or spawnToken ~= sequence then
 			return
@@ -241,7 +235,6 @@ local function playSpawnAnimation(character)
 		end
 	end)
 
-	-- Delay so previous animations have time to fully stop before spawn starts.
 	task.wait(0.3)
 
 	if character ~= player.Character or spawnToken ~= sequence then
@@ -249,7 +242,6 @@ local function playSpawnAnimation(character)
 		return
 	end
 
-	-- Stop any animation that may have started during the delay.
 	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
 		stopTrack(track)
 	end
@@ -277,12 +269,12 @@ local function playSpawnAnimation(character)
 		if sound and sound.Parent then
 			sound:Destroy()
 		end
+
 		if spawnSound == sound then
 			spawnSound = nil
 		end
 	end)
 
-	-- Movement cancels the spawn animation and sound.
 	movementConnection = humanoid.Running:Connect(function(speed)
 		if spawnActive and speed > 0.1 and spawnToken == sequence then
 			stopCurrent(true)
@@ -355,6 +347,7 @@ end)
 -- Ravage Hit
 addMove("Ravage Hit", function(token)
 	playAnimation("16945550029")
+
 	playSound("16945691441", 0, token)
 	playSound("16945593216", 0, token)
 	playSound("16945517708", 0, token)
@@ -364,6 +357,7 @@ end)
 -- Ravage Victim
 addMove("Ravage Victim", function(token)
 	playAnimation("16945557433")
+
 	playSound("16945691441", 0, token)
 	playSound("16945593216", 0, token)
 	playSound("16945517708", 0, token)
@@ -373,6 +367,7 @@ end)
 -- 20-20-20 Dropkick
 addMove("20-20-20 Dropkick", function(token)
 	playAnimation("17354976067")
+
 	playSound("17356346310", 0, token)
 	playSound("17429233290", 0, token)
 end)
@@ -380,6 +375,7 @@ end)
 -- 20 Series
 addMove("20 Series", function(token)
 	playAnimation("17140902079")
+
 	playSound("17150550559", 0, token)
 	playSound("17150550302", 0, token)
 end)
@@ -387,6 +383,7 @@ end)
 -- 20 Series Alt
 addMove("20 Series Alt", function(token)
 	playAnimation("18445236460")
+
 	playSound("18445228136", 0, token)
 	playSound("18445228824", 0, token)
 	playSound("18445227792", 0, token)
@@ -407,6 +404,7 @@ end)
 -- Stoic Bomb
 addMove("Stoic Bomb", function(token)
 	playAnimation("17141153099")
+
 	playSound("17141392513", 0, token)
 	playSound("17141392976", 1, token)
 	playSound("17141392676", 2, token)
@@ -416,6 +414,7 @@ end)
 -- Collateral Ruin
 addMove("Collateral Ruin", function(token)
 	playAnimation("17325254223")
+
 	playSound("74376324560435", 0, token)
 	playSound("72000489811842", 1.5, token)
 end)
@@ -423,6 +422,7 @@ end)
 -- Dropkick hit
 addMove("Dropkick hit", function(token)
 	playAnimation("17420452843")
+
 	playSound("17363374089", 0, token)
 	playSound("17363383992", 0, token)
 end)
@@ -430,6 +430,7 @@ end)
 -- Wall Combo
 addMove("Wall Combo", function(token)
 	playAnimation("18447913645")
+
 	playSound("18443048724", 0, token)
 	playSound("18443049348", 0, token)
 	playSound("18443813318", 5.9, token)
@@ -551,6 +552,7 @@ local startPosition
 
 local function updateDrag(input)
 	local delta = input.Position - dragStart
+
 	local camera = workspace.CurrentCamera
 	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
 	local menuSize = frame.AbsoluteSize
@@ -595,10 +597,15 @@ openButton.Activated:Connect(function()
 	frame.Visible = not frame.Visible
 end)
 
--- Spawn + respawn handling ----------------------------------------------------
+-- Respawn-safe activation -----------------------------------------------------
 
 player.CharacterRemoving:Connect(function()
 	stopCurrent(true)
+
+	if animationReplacementConnection then
+		animationReplacementConnection:Disconnect()
+		animationReplacementConnection = nil
+	end
 end)
 
 player.CharacterAdded:Connect(function(character)
