@@ -1,9 +1,8 @@
 -- LocalScript: place in StarterPlayer > StarterPlayerScripts
--- Movable animation/sound menu with scrolling list.
--- The spawn animation has priority until it finishes or the player moves.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -12,8 +11,10 @@ local currentSounds = {}
 local sequence = 0
 
 local spawnTrack = nil
+local spawnSound = nil
 local spawnActive = false
 local spawnAnimationConnection = nil
+local spawnHeartbeatConnection = nil
 local movementConnection = nil
 
 local SPAWN_ANIMATION_ID = "17325160621"
@@ -21,6 +22,7 @@ local SPAWN_SOUND_ID = "17325174223"
 
 local function getCharacter()
 	local character = player.Character or player.CharacterAdded:Wait()
+
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 		or character:WaitForChild("Humanoid")
 
@@ -41,7 +43,7 @@ local function getTorso(character)
 		or character
 end
 
-local function disconnectConnection(connection)
+local function disconnect(connection)
 	if connection then
 		connection:Disconnect()
 	end
@@ -49,33 +51,52 @@ local function disconnectConnection(connection)
 	return nil
 end
 
+local function stopTrack(track)
+	if track and track.IsPlaying then
+		track:Stop(0.15)
+	end
+end
+
+local function stopSound(sound)
+	if sound then
+		sound:Stop()
+		sound:Destroy()
+	end
+end
+
 local function stopCurrent(force)
-	-- Menu animations cannot interrupt the spawn animation unless forced.
+	-- Do not let normal menu actions interrupt the spawn animation.
 	if spawnActive and not force then
 		return false
 	end
 
 	sequence += 1
 
-	spawnAnimationConnection = disconnectConnection(spawnAnimationConnection)
-	movementConnection = disconnectConnection(movementConnection)
+	spawnAnimationConnection = disconnect(spawnAnimationConnection)
+	spawnHeartbeatConnection = disconnect(spawnHeartbeatConnection)
+	movementConnection = disconnect(movementConnection)
 
 	spawnActive = false
+
+	if spawnTrack then
+		stopTrack(spawnTrack)
+	end
+
+	if spawnSound then
+		stopSound(spawnSound)
+	end
+
 	spawnTrack = nil
+	spawnSound = nil
 
 	for _, track in ipairs(currentTracks) do
-		if track and track.IsPlaying then
-			track:Stop(0.15)
-		end
+		stopTrack(track)
 	end
 
 	table.clear(currentTracks)
 
 	for _, sound in ipairs(currentSounds) do
-		if sound then
-			sound:Stop()
-			sound:Destroy()
-		end
+		stopSound(sound)
 	end
 
 	table.clear(currentSounds)
@@ -83,7 +104,7 @@ local function stopCurrent(force)
 	return true
 end
 
-local function playAnimation(id)
+local function playAnimation(id, priority)
 	local _, _, animator = getCharacter()
 
 	local animation = Instance.new("Animation")
@@ -92,7 +113,9 @@ local function playAnimation(id)
 	local track = animator:LoadAnimation(animation)
 	animation:Destroy()
 
+	track.Priority = priority or Enum.AnimationPriority.Action
 	track:Play(0.15)
+
 	table.insert(currentTracks, track)
 
 	return track
@@ -100,7 +123,7 @@ end
 
 local function playSound(id, delayTime, token)
 	task.delay(delayTime or 0, function()
-		if token ~= sequence then
+		if token ~= sequence or spawnActive then
 			return
 		end
 
@@ -132,27 +155,54 @@ local function playSpawnAnimation(character)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 		or character:WaitForChild("Humanoid")
 
-	local animator = humanoid:FindFirstChildOfClass("Animator")
-		or Instance.new("Animator", humanoid)
+	local animator = character:FindFirstChildOfClass("Humanoid"):FindFirstChildOfClass("Animator")
 
-	-- Stop all previous animations and sounds first.
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	-- Stop anything from the previous character or previous animation.
 	stopCurrent(true)
 
-	-- Block menu animations during the preparation delay.
 	spawnActive = true
+	local spawnToken = sequence
 
-	-- Give Roblox 0.3 seconds to finish stopping previous tracks.
+	-- Immediately stop animations that try to play during the spawn lock.
+	spawnAnimationConnection = animator.AnimationPlayed:Connect(function(track)
+		if spawnActive and track ~= spawnTrack then
+			stopTrack(track)
+		end
+	end)
+
+	-- Continuously enforce the spawn animation lock.
+	spawnHeartbeatConnection = RunService.Heartbeat:Connect(function()
+		if not spawnActive or spawnToken ~= sequence then
+			return
+		end
+
+		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			if track ~= spawnTrack then
+				stopTrack(track)
+			end
+		end
+
+		if spawnTrack and not spawnTrack.IsPlaying then
+			spawnActive = false
+		end
+	end)
+
+	-- Give Roblox time to finish stopping old tracks.
 	task.wait(0.3)
 
-	-- Make sure the character was not replaced during the delay.
-	if character ~= player.Character then
-		spawnActive = false
+	if character ~= player.Character or spawnToken ~= sequence then
+		stopCurrent(true)
 		return
 	end
 
-	-- Stop anything that may have started during the delay.
+	-- Stop anything that appeared during the delay.
 	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-		track:Stop(0.15)
+		stopTrack(track)
 	end
 
 	local animation = Instance.new("Animation")
@@ -161,55 +211,46 @@ local function playSpawnAnimation(character)
 	local track = animator:LoadAnimation(animation)
 	animation:Destroy()
 
+	track.Priority = Enum.AnimationPriority.Action4
 	spawnTrack = track
-	spawnActive = true
 
-	local token = sequence
-
-	-- Stop every other animation while the spawn animation is active.
-	spawnAnimationConnection = animator.AnimationPlayed:Connect(function(otherTrack)
-		if spawnActive and otherTrack ~= spawnTrack and otherTrack.IsPlaying then
-			otherTrack:Stop(0.15)
+	track.Stopped:Connect(function()
+		if spawnTrack ~= track then
+			return
 		end
+
+		spawnActive = false
+		spawnTrack = nil
+
+		spawnAnimationConnection = disconnect(spawnAnimationConnection)
+		spawnHeartbeatConnection = disconnect(spawnHeartbeatConnection)
+		movementConnection = disconnect(movementConnection)
 	end)
 
 	track:Play(0.15)
-	table.insert(currentTracks, track)
 
-	-- Play the spawn sound from the player's torso.
 	local sound = Instance.new("Sound")
 	sound.SoundId = "rbxassetid://" .. SPAWN_SOUND_ID
 	sound.Volume = 1
 	sound.Parent = getTorso(character)
 
-	table.insert(currentSounds, sound)
+	spawnSound = sound
+	sound:Play()
 
 	sound.Ended:Connect(function()
 		if sound and sound.Parent then
 			sound:Destroy()
 		end
-	end)
 
-	sound:Play()
-
-	-- Moving cancels the spawn animation and sound.
-	movementConnection = humanoid.Running:Connect(function(speed)
-		if spawnActive and speed > 0.1 and token == sequence then
-			stopCurrent(true)
+		if spawnSound == sound then
+			spawnSound = nil
 		end
 	end)
 
-	-- Unlock the menu after the spawn animation finishes.
-	track.Stopped:Connect(function()
-		if spawnTrack == track then
-			spawnTrack = nil
-			spawnActive = false
-
-			spawnAnimationConnection =
-				disconnectConnection(spawnAnimationConnection)
-
-			movementConnection =
-				disconnectConnection(movementConnection)
+	-- Moving cancels the spawn animation and sound.
+	movementConnection = humanoid.Running:Connect(function(speed)
+		if spawnActive and speed > 0.1 and spawnToken == sequence then
+			stopCurrent(true)
 		end
 	end)
 end
@@ -222,7 +263,6 @@ local function addMove(name, callback)
 	table.insert(moveOrder, name)
 end
 
--- Unlimited Flex Works
 addMove("Unlimited Flex Works", function(token)
 	playAnimation("77727115892579")
 	playSound("95410275491981", 0.2, token)
@@ -230,7 +270,6 @@ addMove("Unlimited Flex Works", function(token)
 	playSound("99126314241685", 0, token)
 end)
 
--- Five Seasons
 addMove("Five Seasons", function(token)
 	playAnimation("18462892217")
 
@@ -256,99 +295,78 @@ addMove("Five Seasons", function(token)
 	end)
 end)
 
--- Ravage Startup
 addMove("Ravage Startup", function(token)
 	playAnimation("16945573694")
 	playSound("16945495411", 0, token)
 end)
 
--- Ravage Hit
 addMove("Ravage Hit", function(token)
 	playAnimation("16945550029")
-
 	playSound("16945691441", 0, token)
 	playSound("16945593216", 0, token)
 	playSound("16945517708", 0, token)
 	playSound("16945723339", 2, token)
 end)
 
--- Ravage Victim
 addMove("Ravage Victim", function(token)
 	playAnimation("16945557433")
-
 	playSound("16945691441", 0, token)
 	playSound("16945593216", 0, token)
 	playSound("16945517708", 0, token)
 	playSound("16945723339", 2, token)
 end)
 
--- 20-20-20 Dropkick
 addMove("20-20-20 Dropkick", function(token)
 	playAnimation("17354976067")
-
 	playSound("17356346310", 0, token)
 	playSound("17429233290", 0, token)
 end)
 
--- 20 Series
 addMove("20 Series", function(token)
 	playAnimation("17140902079")
-
 	playSound("17150550559", 0, token)
 	playSound("17150550302", 0, token)
 end)
 
--- 20 Series Alt
 addMove("20 Series Alt", function(token)
 	playAnimation("18445236460")
-
 	playSound("18445228136", 0, token)
 	playSound("18445228824", 0, token)
 	playSound("18445227792", 0, token)
 end)
 
--- Swift Sweep
 addMove("Swift Sweep", function(token)
 	playAnimation("16944265635")
 	playSound("16944636115", 0, token)
 end)
 
--- Swift Sweep Kick
 addMove("Swift Sweep Kick", function(token)
 	playAnimation("16944345619")
 	playSound("16944654440", 0.1, token)
 end)
 
--- Stoic Bomb
 addMove("Stoic Bomb", function(token)
 	playAnimation("17141153099")
-
 	playSound("17141392513", 0, token)
 	playSound("17141392976", 1, token)
 	playSound("17141392676", 2, token)
 	playSound("17141392854", 3.5, token)
 end)
 
--- Collateral Ruin
 addMove("Collateral Ruin", function(token)
 	playAnimation("17325254223")
-
 	playSound("74376324560435", 0, token)
 	playSound("72000489811842", 1.5, token)
 end)
 
--- Dropkick hit
 addMove("Dropkick hit", function(token)
 	playAnimation("17420452843")
-
 	playSound("17363374089", 0, token)
 	playSound("17363383992", 0, token)
 end)
 
--- Wall Combo
 addMove("Wall Combo", function(token)
 	playAnimation("18447913645")
-
 	playSound("18443048724", 0, token)
 	playSound("18443049348", 0, token)
 	playSound("18443813318", 5.9, token)
@@ -410,7 +428,6 @@ scrollingFrame.BackgroundTransparency = 0.15
 scrollingFrame.BorderSizePixel = 0
 scrollingFrame.ScrollBarThickness = 7
 scrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(110, 110, 130)
-scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 scrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
 scrollingFrame.ClipsDescendants = true
@@ -445,15 +462,13 @@ for order, name in ipairs(moveOrder) do
 	button.TextSize = 13
 	button.Font = Enum.Font.Gotham
 	button.LayoutOrder = order
-	button.AutoButtonColor = true
 	button.Parent = scrollingFrame
 
-	local buttonCorner = Instance.new("UICorner")
-	buttonCorner.CornerRadius = UDim.new(0, 6)
-	buttonCorner.Parent = button
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = button
 
 	button.Activated:Connect(function()
-		-- Do not allow menu animations to interrupt spawn animation.
 		if spawnActive then
 			return
 		end
@@ -465,7 +480,7 @@ for order, name in ipairs(moveOrder) do
 	end)
 end
 
--- Movable menu --------------------------------------------------------------
+-- Dragging ------------------------------------------------------------------
 
 local dragging = false
 local dragStart
@@ -473,18 +488,18 @@ local startPosition
 
 local function updateDrag(input)
 	local delta = input.Position - dragStart
+	local viewport = workspace.CurrentCamera
+		and workspace.CurrentCamera.ViewportSize
+		or Vector2.new(1920, 1080)
 
-	local camera = workspace.CurrentCamera
-	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
 	local menuSize = frame.AbsoluteSize
-
 	local maxX = math.max(0, viewport.X - menuSize.X)
 	local maxY = math.max(0, viewport.Y - menuSize.Y)
 
-	local newX = math.clamp(startPosition.X.Offset + delta.X, 0, maxX)
-	local newY = math.clamp(startPosition.Y.Offset + delta.Y, 0, maxY)
-
-	frame.Position = UDim2.fromOffset(newX, newY)
+	frame.Position = UDim2.fromOffset(
+		math.clamp(startPosition.X.Offset + delta.X, 0, maxX),
+		math.clamp(startPosition.Y.Offset + delta.Y, 0, maxY)
+	)
 end
 
 header.InputBegan:Connect(function(input)
@@ -504,12 +519,10 @@ header.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if not dragging then
-		return
-	end
-
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch then
+	if dragging and (
+		input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch
+	) then
 		updateDrag(input)
 	end
 end)
@@ -523,10 +536,9 @@ player.CharacterRemoving:Connect(function()
 end)
 
 player.CharacterAdded:Connect(function(character)
-	playSpawnAnimation(character)
+	task.defer(playSpawnAnimation, character)
 end)
 
--- Play the spawn animation for the current character.
 if player.Character then
 	task.defer(playSpawnAnimation, player.Character)
 end
