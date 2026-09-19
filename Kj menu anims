@@ -9,6 +9,7 @@ local currentTracks = {}
 local currentSounds = {}
 local movementConnection
 local spawnAnimationConnection
+local spawnAnimationActive = false
 local sequence = 0
 
 local SPAWN_ANIMATION_ID = "17325160621"
@@ -28,6 +29,7 @@ local function stopCurrent()
         spawnAnimationConnection:Disconnect()
         spawnAnimationConnection = nil
     end
+    spawnAnimationActive = false
 
     for _, track in ipairs(currentTracks) do
         if track.IsPlaying then
@@ -88,7 +90,6 @@ local function playSpawnAnimation(character)
     -- Give previously playing animations time to finish stopping.
     task.wait(0.1)
 
-    -- Do not start the spawn animation if another action happened during the wait.
     if token ~= sequence or character ~= player.Character then
         return
     end
@@ -96,7 +97,6 @@ local function playSpawnAnimation(character)
     local humanoid = character:WaitForChild("Humanoid")
     local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
 
-    -- Stop any tracks that may have been started during the short wait.
     for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
         track:Stop(0.15)
     end
@@ -106,10 +106,11 @@ local function playSpawnAnimation(character)
     local track = animator:LoadAnimation(animation)
     animation:Destroy()
 
-    -- Install the guard before playing the spawn track so animations from the
-    -- default Animate script or other scripts cannot play alongside it.
+    -- This remains connected for the entire lifetime of the spawn track.
+    -- Every newly played track is stopped unless the spawn was interrupted.
+    spawnAnimationActive = true
     spawnAnimationConnection = animator.AnimationPlayed:Connect(function(otherTrack)
-        if otherTrack ~= track and otherTrack.IsPlaying then
+        if spawnAnimationActive and otherTrack ~= track then
             otherTrack:Stop(0.15)
         end
     end)
@@ -127,20 +128,23 @@ local function playSpawnAnimation(character)
     end)
     sound:Play()
 
-    -- Stop both the spawn animation and its sound as soon as the player moves.
+    -- Only movement interrupts the spawn animation automatically.
     movementConnection = humanoid.Running:Connect(function(speed)
-        if speed > 0 and token == sequence then
+        if speed > 0 and token == sequence and spawnAnimationActive then
             stopCurrent()
             movementConnection:Disconnect()
             movementConnection = nil
         end
     end)
 
-    -- Remove the guard when the spawn animation naturally ends.
+    -- Remove the guard only when the spawn animation naturally finishes.
     track.Stopped:Connect(function()
-        if spawnAnimationConnection then
-            spawnAnimationConnection:Disconnect()
-            spawnAnimationConnection = nil
+        if spawnAnimationActive and track == currentTracks[1] then
+            spawnAnimationActive = false
+            if spawnAnimationConnection then
+                spawnAnimationConnection:Disconnect()
+                spawnAnimationConnection = nil
+            end
         end
     end)
 end
@@ -277,6 +281,12 @@ for order, name in ipairs(moveOrder) do
     Instance.new("UICorner", button).CornerRadius = UDim.new(0, 6)
 
     button.Activated:Connect(function()
+        -- Menu actions cannot interrupt the spawn animation. It ends only
+        -- when its track finishes or the player moves.
+        if spawnAnimationActive then
+            return
+        end
+
         stopCurrent()
         local token = sequence
         callback(token)
