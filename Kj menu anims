@@ -1,5 +1,6 @@
 -- LocalScript: place in StarterPlayer > StarterPlayerScripts
--- Full animation/sound menu + spawn lock + respawn-safe replacement detection
+-- Movable animation/sound menu with scrolling list
+-- Spawn animation priority: stops other animations until it finishes or the player moves.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -17,17 +18,9 @@ local spawnActive = false
 local spawnAnimationConnection = nil
 local spawnHeartbeatConnection = nil
 local movementConnection = nil
-local animationReplacementConnection = nil
 
 local SPAWN_ANIMATION_ID = "17325160621"
 local SPAWN_SOUND_ID = "17325174223"
-
-local REPLACEMENTS = {
-	[10469493270] = 17325510002,
-	[10469630950] = 17325513870,
-	[10469639222] = 17325522388,
-	[10469643643] = 17325537719,
-}
 
 local function disconnect(connection)
 	if connection then
@@ -82,7 +75,6 @@ local function stopCurrent(force)
 	spawnAnimationConnection = disconnect(spawnAnimationConnection)
 	spawnHeartbeatConnection = disconnect(spawnHeartbeatConnection)
 	movementConnection = disconnect(movementConnection)
-	animationReplacementConnection = disconnect(animationReplacementConnection)
 
 	spawnActive = false
 	spawnTrack = nil
@@ -140,55 +132,6 @@ local function playSound(id, delayTime, token)
 		end)
 
 		sound:Play()
-	end)
-end
-
-local function setupAnimationReplacement(character)
-	if animationReplacementConnection then
-		animationReplacementConnection:Disconnect()
-		animationReplacementConnection = nil
-	end
-
-	if not character or character ~= player.Character then
-		return
-	end
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-		or character:WaitForChild("Humanoid")
-
-	local animator = humanoid:FindFirstChildOfClass("Animator")
-
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = humanoid
-	end
-
-	animationReplacementConnection = animator.AnimationPlayed:Connect(function(animationTrack)
-		if not animationTrack or not animationTrack.Animation then
-			return
-		end
-
-		local animationId = tonumber(string.match(animationTrack.Animation.AnimationId, "%d+"))
-		local replacementId = REPLACEMENTS[animationId]
-
-		if not replacementId then
-			return
-		end
-
-		animationTrack:Stop(0)
-
-		if character ~= player.Character then
-			return
-		end
-
-		local replacementAnimation = Instance.new("Animation")
-		replacementAnimation.AnimationId = "rbxassetid://" .. tostring(replacementId)
-
-		local replacementTrack = animator:LoadAnimation(replacementAnimation)
-		replacementAnimation:Destroy()
-
-		replacementTrack.Priority = Enum.AnimationPriority.Action4
-		replacementTrack:Play(0.1)
 	end)
 end
 
@@ -601,23 +544,16 @@ end)
 
 player.CharacterRemoving:Connect(function()
 	stopCurrent(true)
-
-	if animationReplacementConnection then
-		animationReplacementConnection:Disconnect()
-		animationReplacementConnection = nil
-	end
 end)
 
 player.CharacterAdded:Connect(function(character)
 	task.defer(function()
-		setupAnimationReplacement(character)
 		playSpawnAnimation(character)
 	end)
 end)
 
 if player.Character then
 	task.defer(function()
-		setupAnimationReplacement(player.Character)
 		playSpawnAnimation(player.Character)
 	end)
 end
