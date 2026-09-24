@@ -1,666 +1,185 @@
 -- LocalScript: place in StarterPlayer > StarterPlayerScripts
--- Draggable animation menu with scrolling list
--- Ult Music toggle: loops until turned off
--- Wall Combo: waits 2.9s, then shows numbered decals/images in order
--- each image stays visible for 0.014s and changes with a 0.014s cooldown
+-- Animation menu with sounds, Wall Combo frames, and 20 Series VFX.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ContentProvider = game:GetService("ContentProvider")
+local Debris = game:GetService("Debris")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-
-local currentTracks = {}
-local currentSounds = {}
+local currentTracks, currentSounds, currentVfx = {}, {}, {}
 local sequence = 0
-
+local ultMusicEnabled, ultSound = false, nil
 local ULT_MUSIC_ID = "17150550093"
 local WALL_COMBO_ANIMATION_ID = "18447913645"
-
-local WALL_DECAL_DELAY = 2.9
-local WALL_DECAL_DISPLAY_TIME = 0.014
-local WALL_DECAL_COOLDOWN = 0.014
-
-local ultMusicEnabled = false
-local ultSound = nil
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "AnimationSoundMenu"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.Parent = playerGui
+local VFX_FOLDER_PATH = { "Resources", "KJEffects" }
+-- The last asset was supplied as a placeholder in the request. Change this name
+-- if the Attachment/Part has a different name in ReplicatedStorage.
+local FINAL_VFX_NAME = "fine...Emit2"
 
 local function getCharacter()
-	local character = player.Character or player.CharacterAdded:Wait()
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-		or character:WaitForChild("Humanoid")
-
-	local animator = humanoid:FindFirstChildOfClass("Animator")
-
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = humanoid
+	local c = player.Character or player.CharacterAdded:Wait()
+	local h = c:FindFirstChildOfClass("Humanoid") or c:WaitForChild("Humanoid")
+	local a = h:FindFirstChildOfClass("Animator")
+	if not a then a = Instance.new("Animator"); a.Parent = h end
+	return c, h, a
+end
+local function getTorso(c)
+	return c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("HumanoidRootPart") or c
+end
+local function getKJEffects()
+	local object = ReplicatedStorage
+	for _, name in ipairs(VFX_FOLDER_PATH) do
+		object = object:FindFirstChild(name)
+		if not object then return nil end
 	end
-
-	return character, humanoid, animator
+	return object
 end
-
-local function getTorso(character)
-	return character:FindFirstChild("Torso")
-		or character:FindFirstChild("UpperTorso")
-		or character:FindFirstChild("HumanoidRootPart")
-		or character
+local function destroyVfx(object)
+	if object and object.Parent then object:Destroy() end
 end
-
+local function clearVfx()
+	for object in ipairs(currentVfx) do destroyVfx(object) end
+	table.clear(currentVfx)
+end
 local function stopCurrent()
 	sequence += 1
-
-	for _, track in ipairs(currentTracks) do
-		if track and track.IsPlaying then
-			track:Stop(0.15)
-		end
-	end
+	for _, track in ipairs(currentTracks) do if track and track.IsPlaying then track:Stop(0.15) end end
 	table.clear(currentTracks)
-
-	for _, sound in ipairs(currentSounds) do
-		if sound then
-			sound:Stop()
-			sound:Destroy()
-		end
-	end
+	for _, sound in ipairs(currentSounds) do if sound then sound:Stop(); sound:Destroy() end end
 	table.clear(currentSounds)
+	clearVfx()
+	local old = playerGui:FindFirstChild("WallComboSequence")
+	if old then old:Destroy() end
 end
-
 local function stopUltMusic()
-	if ultSound then
-		ultSound:Stop()
-		ultSound:Destroy()
-		ultSound = nil
-	end
+	if ultSound then ultSound:Stop(); ultSound:Destroy(); ultSound = nil end
 end
-
 local function startUltMusic()
-	if not ultMusicEnabled or ultSound then
-		return
-	end
-
-	local character = player.Character
-	if not character then
-		return
-	end
-
+	if not ultMusicEnabled or ultSound or not player.Character then return end
 	local sound = Instance.new("Sound")
-	sound.Name = "UltMusic"
-	sound.SoundId = "rbxassetid://" .. ULT_MUSIC_ID
-	sound.Volume = 1
-	sound.Looped = true
-	sound.Parent = getTorso(character)
-
-	ultSound = sound
-	sound:Play()
+	sound.Name, sound.SoundId, sound.Volume, sound.Looped = "UltMusic", "rbxassetid://"..ULT_MUSIC_ID, 1, true
+	sound.Parent = getTorso(player.Character); ultSound = sound; sound:Play()
 end
-
 local function playAnimation(id, priority)
 	local _, _, animator = getCharacter()
-
-	local animation = Instance.new("Animation")
-	animation.AnimationId = "rbxassetid://" .. tostring(id)
-
-	local track = animator:LoadAnimation(animation)
-	animation:Destroy()
-
-	track.Priority = priority or Enum.AnimationPriority.Action
-	track:Play(0.15)
-
+	local animation = Instance.new("Animation"); animation.AnimationId = "rbxassetid://"..tostring(id)
+	local track = animator:LoadAnimation(animation); animation:Destroy()
+	track.Priority = priority or Enum.AnimationPriority.Action; track:Play(0.15)
 	table.insert(currentTracks, track)
 	return track
 end
-
 local function playSound(id, delayTime, token)
 	task.delay(delayTime or 0, function()
-		if token ~= sequence then
-			return
-		end
-
-		local character = getCharacter()
-		local torso = getTorso(character)
-
-		local sound = Instance.new("Sound")
-		sound.SoundId = "rbxassetid://" .. tostring(id)
-		sound.Volume = 1
-		sound.Parent = torso
-
+		if token ~= sequence then return end
+		local sound = Instance.new("Sound"); sound.SoundId = "rbxassetid://"..tostring(id); sound.Volume = 1; sound.Parent = getTorso(getCharacter())
 		table.insert(currentSounds, sound)
-
-		sound.Ended:Connect(function()
-			if sound and sound.Parent then
-				sound:Destroy()
-			end
-		end)
-
+		sound.Ended:Connect(function() if sound.Parent then sound:Destroy() end end)
 		sound:Play()
 	end)
 end
-
-local function playSoundThenUltMusic(soundId, token)
+local function playSoundThenUltMusic(id, token)
 	task.spawn(function()
-		if token ~= sequence or not ultMusicEnabled or ultSound then
-			return
-		end
-
-		local character = getCharacter()
-		local torso = getTorso(character)
-
-		local sound = Instance.new("Sound")
-		sound.SoundId = "rbxassetid://" .. tostring(soundId)
-		sound.Volume = 1
-		sound.Parent = torso
-
+		if token ~= sequence or not ultMusicEnabled or ultSound then return end
+		local sound = Instance.new("Sound"); sound.SoundId = "rbxassetid://"..tostring(id); sound.Volume = 1; sound.Parent = getTorso(getCharacter())
 		table.insert(currentSounds, sound)
-
-		sound.Ended:Connect(function()
-			if sound and sound.Parent then
-				sound:Destroy()
-			end
-
-			if ultMusicEnabled then
-				startUltMusic()
-			end
-		end)
-
+		sound.Ended:Connect(function() if sound.Parent then sound:Destroy() end; if ultMusicEnabled and token == sequence then startUltMusic() end end)
 		sound:Play()
 	end)
 end
 
-local function getNumberFromName(name)
-	return tonumber(string.match(name, "%d+")) or math.huge
-end
-
-local function getAssetId(texture)
-	if not texture or texture == "" then
-		return nil
+-- Clones one VFX, emits its particles immediately, and stops it safely with the move.
+local function emitVfx(name, lifetime, token)
+	if token ~= sequence then return nil end
+	local folder = getKJEffects()
+	local template = folder and folder:FindFirstChild(name)
+	if not template then warn("VFX not found: ReplicatedStorage.Resources.KJEffects."..name); return nil end
+	local character = player.Character or player.CharacterAdded:Wait()
+	local targetPart = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart")
+	local object = template:Clone()
+	if object:IsA("Attachment") then
+		object.Parent = targetPart; object.Position = Vector3.zero
+	elseif object:IsA("BasePart") then
+		object.CFrame = targetPart.CFrame; object.Parent = workspace
+	else
+		object.Parent = targetPart
 	end
-
-	return string.match(texture, "%d+")
-end
-
-local function removeOldWallComboGui()
-	local oldGui = playerGui:FindFirstChild("WallComboSequence")
-	if oldGui then
-		oldGui:Destroy()
-		task.wait()
+	table.insert(currentVfx, object)
+	Debris:AddItem(object, lifetime)
+	for _, emitter in ipairs(object:GetDescendants()) do
+		if emitter:IsA("ParticleEmitter") then emitter.Enabled = true; emitter:Emit(3); emitter.Enabled = false end
 	end
+	return object
+end
+local function play20SeriesVfx(track, token)
+	-- fine...Emit is played once as soon as the animation starts.
+	emitVfx("fine...Emit", 3, token)
+	local started = os.clock()
+	while token == sequence and track.IsPlaying and os.clock() - started < 8 do
+		emitVfx("fine...Emit1", 0.5, token)
+		emitVfx("fine...Emit1OG", 0.5, token)
+		task.wait(0.2)
+	end
+	if token ~= sequence or not track.IsPlaying then return end
+	-- These two are emitted only after the first eight seconds.
+	emitVfx("fine...Emit2OG", 5, token)
+	emitVfx(FINAL_VFX_NAME, 5, token)
 end
 
-local function showWallComboDecals(token)
-	task.delay(WALL_DECAL_DELAY, function()
-		if token ~= sequence then
-			return
-		end
+local moves, moveOrder = {}, {}
+local function addMove(name, callback) moves[name] = callback; table.insert(moveOrder, name) end
+addMove("Unlimited Flex Works", function(t) playAnimation("77727115892579"); playSound("95410275491981",.2,t); playSound("128136381213631",0,t); playSound("99126314241685",0,t) end)
+addMove("Five Seasons", function(t) playAnimation("18462892217"); playSound("18460952794",0,t); playSound("18460863844",0,t); playSound("18460893321",3.5,t); playSound("18461671633",7.5,t); task.delay(12.5,function() if t~=sequence then return end; stopCurrent(); local n=sequence; playAnimation("18462894593"); playSound("18461821277",0,n); playSound("18462018744",1.5,n); playSound("18462312002",3.5,n); playSound("18462330981",5.2,n) end) end)
+addMove("Ravage Startup", function(t) playAnimation("16945573694"); playSound("16945495411",0,t) end)
+addMove("Ravage Hit", function(t) playAnimation("16945550029"); playSound("16945691441",0,t); playSound("16945593216",0,t); playSound("16945517708",0,t); playSound("16945723339",2,t) end)
+addMove("Ravage Victim", function(t) playAnimation("16945557433"); playSound("16945691441",0,t); playSound("16945593216",0,t); playSound("16945517708",0,t); playSound("16945723339",2,t) end)
+addMove("20-20-20 Dropkick", function(t) playAnimation("17354976067"); playSound("17356346310",0,t); playSound("17429233290",0,t) end)
+addMove("20 Series", function(t)
+	local track = playAnimation("17140902079")
+	if ultMusicEnabled then playSoundThenUltMusic("17150550559",t) else playSound("17150550559",0,t) end
+	playSound("17150550302",0,t)
+	task.spawn(play20SeriesVfx, track, t)
+end)
+addMove("20 Series Alt", function(t) playAnimation("18445236460"); if ultMusicEnabled then playSoundThenUltMusic("18445228136",t) else playSound("18445228136",0,t) end; playSound("18445228824",0,t); playSound("18445227792",0,t) end)
+addMove("Swift Sweep", function(t) playAnimation("16944265635"); playSound("16944636115",0,t) end)
+addMove("Swift Sweep Kick", function(t) playAnimation("16944345619"); playSound("16944654440",.1,t) end)
+addMove("Stoic Bomb", function(t) playAnimation("17141153099"); playSound("17141392513",0,t); playSound("17141392976",1,t); playSound("17141392676",2,t); playSound("17141392854",3.5,t) end)
+addMove("Collateral Ruin", function(t) playAnimation("17325254223"); playSound("74376324560435",0,t); playSound("72000489811842",1.5,t) end)
+addMove("Dropkick Hit", function(t) playAnimation("17420452843"); playSound("17363374089",0,t); playSound("17363383992",0,t) end)
 
-		removeOldWallComboGui()
-
-		local resources = ReplicatedStorage:FindFirstChild("Resources")
-		local kjEffects = resources and resources:FindFirstChild("KJEffects")
-		local wallsFolder = kjEffects and kjEffects:FindFirstChild("Walls")
-
-		if not wallsFolder then
-			warn("ReplicatedStorage.Resources.KJEffects.Walls was not found.")
-			return
-		end
-
-		local wallGui = Instance.new("ScreenGui")
-		wallGui.Name = "WallComboSequence"
-		wallGui.IgnoreGuiInset = true
-		wallGui.ResetOnSpawn = false
-		wallGui.DisplayOrder = 100
-		wallGui.Parent = playerGui
-
-		local background = Instance.new("Frame")
-		background.Name = "Background"
-		background.Size = UDim2.fromScale(1, 1)
-		background.Position = UDim2.fromScale(0, 0)
-		background.BackgroundColor3 = Color3.new(0, 0, 0)
-		background.BackgroundTransparency = 0
-		background.BorderSizePixel = 0
-		background.ZIndex = 1
-		background.Parent = wallGui
-
-		local frames = {}
-
-		local framesFolder = wallsFolder:FindFirstChild("Frames", true)
-
-		if framesFolder then
-			for _, object in ipairs(framesFolder:GetChildren()) do
-				if object:IsA("ImageLabel") or object:IsA("ImageButton") then
-					table.insert(frames, {
-						name = object.Name,
-						number = getNumberFromName(object.Name),
-						image = object.Image,
-					})
-				end
-			end
-		end
-
-		if #frames == 0 then
-			for _, object in ipairs(wallsFolder:GetDescendants()) do
-				if object:IsA("Decal") then
-					local assetId = getAssetId(object.Texture)
-					if assetId then
-						table.insert(frames, {
-							name = object.Name,
-							number = getNumberFromName(object.Name),
-							image = "rbxassetid://" .. assetId,
-						})
-					end
-				end
-			end
-		end
-
-		table.sort(frames, function(firstFrame, secondFrame)
-			if firstFrame.number == secondFrame.number then
-				return firstFrame.name < secondFrame.name
-			end
-
-			return firstFrame.number < secondFrame.number
-		end)
-
-		if #frames == 0 then
-			warn("No numbered frames or decals were found in ReplicatedStorage.Resources.KJEffects.Walls.")
-			wallGui:Destroy()
-			return
-		end
-
-		local imageObjects = {}
-
-		for index, frameData in ipairs(frames) do
-			local image = Instance.new("ImageLabel")
-			image.Name = "WallFrame_" .. tostring(index)
-			image.Size = UDim2.fromScale(1, 1)
-			image.Position = UDim2.fromScale(0, 0)
-			image.BackgroundTransparency = 1
-			image.BorderSizePixel = 0
-			image.Image = frameData.image
-			image.ImageTransparency = 1
-			image.ScaleType = Enum.ScaleType.Stretch
-			image.ZIndex = 2
-			image.Parent = wallGui
-
-			table.insert(imageObjects, image)
-		end
-
-		if #imageObjects > 0 then
-			local success, err = pcall(function()
-				ContentProvider:PreloadAsync(imageObjects)
-			end)
-
-			if not success then
-				warn("Wall Combo image preload failed:", err)
-			end
-		end
-
-		for _, image in ipairs(imageObjects) do
-			if token ~= sequence or not wallGui.Parent then
-				wallGui:Destroy()
-				return
-			end
-
-			for _, otherImage in ipairs(imageObjects) do
-				otherImage.ImageTransparency = 1
-			end
-
-			image.ImageTransparency = 0
-			task.wait(WALL_DECAL_DISPLAY_TIME)
-
-			image.ImageTransparency = 1
-			task.wait(WALL_DECAL_COOLDOWN)
-		end
-
-		if wallGui and wallGui.Parent then
-			wallGui:Destroy()
-		end
+-- Wall Combo frame display (kept compatible with the original menu).
+local function showWallCombo(token)
+	task.delay(2.9,function()
+		if token~=sequence then return end
+		local walls = getKJEffects() and getKJEffects():FindFirstChild("Walls")
+		if not walls then warn("ReplicatedStorage.Resources.KJEffects.Walls was not found."); return end
+		local screen = Instance.new("ScreenGui"); screen.Name="WallComboSequence"; screen.IgnoreGuiInset=true; screen.DisplayOrder=100; screen.Parent=playerGui
+		local bg=Instance.new("Frame"); bg.Size=UDim2.fromScale(1,1); bg.BackgroundColor3=Color3.new(0,0,0); bg.ZIndex=1; bg.Parent=screen
+		local frames={}; local source=walls:FindFirstChild("Frames",true)
+		if source then for _,v in ipairs(source:GetChildren()) do if v:IsA("ImageLabel") or v:IsA("ImageButton") then table.insert(frames,{n=tonumber(string.match(v.Name,"%d+")) or math.huge,name=v.Name,image=v.Image}) end end end
+		if #frames==0 then for _,v in ipairs(walls:GetDescendants()) do if v:IsA("Decal") then table.insert(frames,{n=tonumber(string.match(v.Name,"%d+")) or math.huge,name=v.Name,image=v.Texture}) end end end
+		table.sort(frames,function(a,b) return a.n==b.n and a.name<b.name or a.n<b.n end)
+		local images={}; for i,v in ipairs(frames) do local im=Instance.new("ImageLabel"); im.Size=UDim2.fromScale(1,1); im.BackgroundTransparency=1; im.Image=v.image; im.ImageTransparency=1; im.ZIndex=2; im.Parent=screen; table.insert(images,im) end
+		pcall(function() ContentProvider:PreloadAsync(images) end)
+		for _,im in ipairs(images) do if token~=sequence then screen:Destroy(); return end; im.ImageTransparency=0; task.wait(.014); im.ImageTransparency=1; task.wait(.014) end
+		if screen.Parent then screen:Destroy() end
 	end)
 end
+addMove("Wall Combo", function(t) playAnimation(WALL_COMBO_ANIMATION_ID); playSound("18443048724",0,t); playSound("18443049348",0,t); playSound("18443813318",5.9,t); showWallCombo(t) end)
 
-local moves = {}
-local moveOrder = {}
-
-local function addMove(name, callback)
-	moves[name] = callback
-	table.insert(moveOrder, name)
-end
-
--- Unlimited Flex Works
-addMove("Unlimited Flex Works", function(token)
-	playAnimation("77727115892579")
-	playSound("95410275491981", 0.2, token)
-	playSound("128136381213631", 0, token)
-	playSound("99126314241685", 0, token)
-end)
-
--- Five Seasons
-addMove("Five Seasons", function(token)
-	playAnimation("18462892217")
-
-	playSound("18460952794", 0, token)
-	playSound("18460863844", 0, token)
-	playSound("18460893321", 3.5, token)
-	playSound("18461671633", 7.5, token)
-
-	task.delay(12.5, function()
-		if token ~= sequence then
-			return
-		end
-
-		stopCurrent()
-
-		local newToken = sequence
-
-		playAnimation("18462894593")
-		playSound("18461821277", 0, newToken)
-		playSound("18462018744", 1.5, newToken)
-		playSound("18462312002", 3.5, newToken)
-		playSound("18462330981", 5.2, newToken)
-	end)
-end)
-
--- Ravage Startup
-addMove("Ravage Startup", function(token)
-	playAnimation("16945573694")
-	playSound("16945495411", 0, token)
-end)
-
--- Ravage Hit
-addMove("Ravage Hit", function(token)
-	playAnimation("16945550029")
-	playSound("16945691441", 0, token)
-	playSound("16945593216", 0, token)
-	playSound("16945517708", 0, token)
-	playSound("16945723339", 2, token)
-end)
-
--- Ravage Victim
-addMove("Ravage Victim", function(token)
-	playAnimation("16945557433")
-	playSound("16945691441", 0, token)
-	playSound("16945593216", 0, token)
-	playSound("16945517708", 0, token)
-	playSound("16945723339", 2, token)
-end)
-
--- 20-20-20 Dropkick
-addMove("20-20-20 Dropkick", function(token)
-	playAnimation("17354976067")
-	playSound("17356346310", 0, token)
-	playSound("17429233290", 0, token)
-end)
-
--- 20 Series
-addMove("20 Series", function(token)
-	playAnimation("17140902079")
-
-	if ultMusicEnabled then
-		playSoundThenUltMusic("17150550559", token)
-	else
-		playSound("17150550559", 0, token)
-	end
-
-	playSound("17150550302", 0, token)
-end)
-
--- 20 Series Alt
-addMove("20 Series Alt", function(token)
-	playAnimation("18445236460")
-
-	if ultMusicEnabled then
-		playSoundThenUltMusic("18445228136", token)
-	else
-		playSound("18445228136", 0, token)
-	end
-
-	playSound("18445228824", 0, token)
-	playSound("18445227792", 0, token)
-end)
-
--- Swift Sweep
-addMove("Swift Sweep", function(token)
-	playAnimation("16944265635")
-	playSound("16944636115", 0, token)
-end)
-
--- Swift Sweep Kick
-addMove("Swift Sweep Kick", function(token)
-	playAnimation("16944345619")
-	playSound("16944654440", 0.1, token)
-end)
-
--- Stoic Bomb
-addMove("Stoic Bomb", function(token)
-	playAnimation("17141153099")
-	playSound("17141392513", 0, token)
-	playSound("17141392976", 1, token)
-	playSound("17141392676", 2, token)
-	playSound("17141392854", 3.5, token)
-end)
-
--- Collateral Ruin
-addMove("Collateral Ruin", function(token)
-	playAnimation("17325254223")
-	playSound("74376324560435", 0, token)
-	playSound("72000489811842", 1.5, token)
-end)
-
--- Dropkick Hit
-addMove("Dropkick Hit", function(token)
-	playAnimation("17420452843")
-	playSound("17363374089", 0, token)
-	playSound("17363383992", 0, token)
-end)
-
--- Wall Combo
-addMove("Wall Combo", function(token)
-	playAnimation(WALL_COMBO_ANIMATION_ID)
-
-	playSound("18443048724", 0, token)
-	playSound("18443049348", 0, token)
-	playSound("18443813318", 5.9, token)
-
-	showWallComboDecals(token)
-end)
-
--- GUI ------------------------------------------------------------------------
-
-local openButton = Instance.new("TextButton")
-openButton.Name = "OpenButton"
-openButton.Size = UDim2.fromOffset(115, 36)
-openButton.Position = UDim2.new(0, 18, 0.5, -18)
-openButton.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-openButton.TextColor3 = Color3.new(1, 1, 1)
-openButton.Text = "Animations"
-openButton.TextSize = 14
-openButton.Font = Enum.Font.Gotham
-openButton.ZIndex = 20
-openButton.Parent = gui
-
-local openCorner = Instance.new("UICorner")
-openCorner.CornerRadius = UDim.new(0, 8)
-openCorner.Parent = openButton
-
-local ultButton = Instance.new("TextButton")
-ultButton.Name = "UltMusicButton"
-ultButton.Size = UDim2.fromOffset(115, 30)
-ultButton.Position = UDim2.new(0, 18, 0.5, 24)
-ultButton.BackgroundColor3 = Color3.fromRGB(48, 48, 62)
-ultButton.TextColor3 = Color3.new(1, 1, 1)
-ultButton.Text = "Ult Music: OFF"
-ultButton.TextSize = 13
-ultButton.Font = Enum.Font.Gotham
-ultButton.ZIndex = 20
-ultButton.Parent = gui
-
-local ultCorner = Instance.new("UICorner")
-ultCorner.CornerRadius = UDim.new(0, 8)
-ultCorner.Parent = ultButton
-
-local frame = Instance.new("Frame")
-frame.Name = "Menu"
-frame.Size = UDim2.fromOffset(240, 350)
-frame.Position = UDim2.new(0, 18, 0.5, 25)
-frame.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-frame.Visible = false
-frame.ClipsDescendants = true
-frame.ZIndex = 1
-frame.Parent = gui
-
-local frameCorner = Instance.new("UICorner")
-frameCorner.CornerRadius = UDim.new(0, 10)
-frameCorner.Parent = frame
-
-local header = Instance.new("TextLabel")
-header.Name = "DragHeader"
-header.Size = UDim2.new(1, -16, 0, 38)
-header.Position = UDim2.fromOffset(8, 4)
-header.BackgroundTransparency = 1
-header.Text = "Animation Menu  •  Drag Here"
-header.TextColor3 = Color3.new(1, 1, 1)
-header.TextSize = 15
-header.Font = Enum.Font.GothamBold
-header.Active = true
-header.ZIndex = 2
-header.Parent = frame
-
-local scrollingFrame = Instance.new("ScrollingFrame")
-scrollingFrame.Name = "AnimationList"
-scrollingFrame.Size = UDim2.new(1, -16, 1, -52)
-scrollingFrame.Position = UDim2.fromOffset(8, 46)
-scrollingFrame.BackgroundColor3 = Color3.fromRGB(17, 17, 24)
-scrollingFrame.BackgroundTransparency = 0.15
-scrollingFrame.BorderSizePixel = 0
-scrollingFrame.ScrollBarThickness = 7
-scrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(110, 110, 130)
-scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-scrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
-scrollingFrame.ClipsDescendants = true
-scrollingFrame.ZIndex = 2
-scrollingFrame.Parent = frame
-
-local scrollCorner = Instance.new("UICorner")
-scrollCorner.CornerRadius = UDim.new(0, 7)
-scrollCorner.Parent = scrollingFrame
-
-local padding = Instance.new("UIPadding")
-padding.PaddingTop = UDim.new(0, 7)
-padding.PaddingBottom = UDim.new(0, 7)
-padding.PaddingLeft = UDim.new(0, 7)
-padding.PaddingRight = UDim.new(0, 7)
-padding.Parent = scrollingFrame
-
-local list = Instance.new("UIListLayout")
-list.Padding = UDim.new(0, 6)
-list.HorizontalAlignment = Enum.HorizontalAlignment.Center
-list.SortOrder = Enum.SortOrder.LayoutOrder
-list.Parent = scrollingFrame
-
-for order, name in ipairs(moveOrder) do
-	local callback = moves[name]
-
-	local button = Instance.new("TextButton")
-	button.Name = name:gsub("%W", "")
-	button.Size = UDim2.new(1, -2, 0, 34)
-	button.BackgroundColor3 = Color3.fromRGB(48, 48, 62)
-	button.TextColor3 = Color3.new(1, 1, 1)
-	button.Text = name
-	button.TextSize = 13
-	button.Font = Enum.Font.Gotham
-	button.LayoutOrder = order
-	button.AutoButtonColor = true
-	button.ZIndex = 3
-	button.Parent = scrollingFrame
-
-	local buttonCorner = Instance.new("UICorner")
-	buttonCorner.CornerRadius = UDim.new(0, 6)
-	buttonCorner.Parent = button
-
-	button.Activated:Connect(function()
-		stopCurrent()
-		local token = sequence
-		callback(token)
-	end)
-end
-
--- Button behavior ------------------------------------------------------------
-
-openButton.Activated:Connect(function()
-	frame.Visible = not frame.Visible
-end)
-
-ultButton.Activated:Connect(function()
-	ultMusicEnabled = not ultMusicEnabled
-
-	if ultMusicEnabled then
-		ultButton.Text = "Ult Music: ON"
-		ultButton.BackgroundColor3 = Color3.fromRGB(60, 120, 75)
-	else
-		ultButton.Text = "Ult Music: OFF"
-		ultButton.BackgroundColor3 = Color3.fromRGB(48, 48, 62)
-		stopUltMusic()
-	end
-end)
-
--- Dragging -------------------------------------------------------------
-
-local dragging = false
-local dragStart
-local startPosition
-
-local function updateDrag(input)
-	local delta = input.Position - dragStart
-
-	local camera = workspace.CurrentCamera
-	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-	local menuSize = frame.AbsoluteSize
-
-	local maxX = math.max(0, viewport.X - menuSize.X)
-	local maxY = math.max(0, viewport.Y - menuSize.Y)
-
-	local newX = math.clamp(startPosition.X.Offset + delta.X, 0, maxX)
-	local newY = math.clamp(startPosition.Y.Offset + delta.Y, 0, maxY)
-
-	frame.Position = UDim2.fromOffset(newX, newY)
-end
-
-header.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
-
-		dragging = true
-		dragStart = input.Position
-		startPosition = frame.Position
-
-		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
-				dragging = false
-			end
-		end)
-	end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-	if not dragging then
-		return
-	end
-
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch then
-		updateDrag(input)
-	end
-end)
-
-player.CharacterRemoving:Connect(function()
-	stopCurrent()
-	stopUltMusic()
-end)
+local gui=Instance.new("ScreenGui"); gui.Name="AnimationSoundMenu"; gui.ResetOnSpawn=false; gui.IgnoreGuiInset=true; gui.Parent=playerGui
+local open=Instance.new("TextButton"); open.Size=UDim2.fromOffset(115,36); open.Position=UDim2.new(0,18,.5,-18); open.Text="Animations"; open.TextColor3=Color3.new(1,1,1); open.BackgroundColor3=Color3.fromRGB(35,35,45); open.Parent=gui
+local ult=Instance.new("TextButton"); ult.Size=UDim2.fromOffset(115,30); ult.Position=UDim2.new(0,18,.5,24); ult.Text="Ult Music: OFF"; ult.TextColor3=Color3.new(1,1,1); ult.BackgroundColor3=Color3.fromRGB(48,48,62); ult.Parent=gui
+local menu=Instance.new("Frame"); menu.Size=UDim2.fromOffset(240,350); menu.Position=UDim2.new(0,18,.5,25); menu.BackgroundColor3=Color3.fromRGB(22,22,30); menu.Visible=false; menu.Parent=gui
+local header=Instance.new("TextButton"); header.Size=UDim2.new(1,0,0,40); header.Text="Animation Menu  •  Drag Here"; header.TextColor3=Color3.new(1,1,1); header.BackgroundTransparency=1; header.Parent=menu
+local scroll=Instance.new("ScrollingFrame"); scroll.Size=UDim2.new(1,-16,1,-48); scroll.Position=UDim2.fromOffset(8,44); scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y; scroll.ScrollBarThickness=7; scroll.Parent=menu
+local layout=Instance.new("UIListLayout"); layout.Padding=UDim.new(0,6); layout.Parent=scroll
+for order,name in ipairs(moveOrder) do local b=Instance.new("TextButton"); b.Size=UDim2.new(1,-4,0,34); b.LayoutOrder=order; b.Text=name; b.TextColor3=Color3.new(1,1,1); b.BackgroundColor3=Color3.fromRGB(48,48,62); b.Parent=scroll; b.Activated:Connect(function() stopCurrent(); moves[name](sequence) end) end
+open.Activated:Connect(function() menu.Visible=not menu.Visible end)
+ult.Activated:Connect(function() ultMusicEnabled=not ultMusicEnabled; ult.Text=ultMusicEnabled and "Ult Music: ON" or "Ult Music: OFF"; if ultMusicEnabled then ult.BackgroundColor3=Color3.fromRGB(60,120,75) else ult.BackgroundColor3=Color3.fromRGB(48,48,62); stopUltMusic() end end)
+local dragging,startInput,startPos=false,nil,nil
+header.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=true; startInput=input.Position; startPos=menu.Position; input.Changed:Connect(function() if input.UserInputState==Enum.UserInputState.End then dragging=false end end) end end)
+UserInputService.InputChanged:Connect(function(input) if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then local d=input.Position-startInput; menu.Position=UDim2.fromOffset(math.max(0,startPos.X.Offset+d.X),math.max(0,startPos.Y.Offset+d.Y)) end end)
+player.CharacterRemoving:Connect(function() stopCurrent(); stopUltMusic() end)
