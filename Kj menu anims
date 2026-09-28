@@ -1225,7 +1225,7 @@ local function playCustomSpawn(character, humanoid, animator)
 		
 		if mainPart then
 			-- Offset del teléfono respecto al brazo derecho (Y = -2 studs)
-			clonedPhone:PivotTo(rightArm.CFrame * CFrame.new(0, -2, 0))
+			clonedPhone:PivotTo(rightArm.CFrame * CFrame.new(0, -2, 0) * CFrame.Angles(math.rad(90), 0, 0))
 			
 			for _, part in ipairs(clonedPhone:GetDescendants()) do
 				if part:IsA("BasePart") then
