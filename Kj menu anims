@@ -1184,7 +1184,7 @@ local function playCustomSpawn(character, humanoid, animator)
 	-- ==========================================
 	-- ACCIÓN 1: Quitar herramientas y cambiar UI 
 	-- ==========================================
-	task.delay(0.1, function()
+	task.delay(0.01, function()
 		if not isSpawnActive then return end
 		
 		local backpack = player:FindFirstChild("Backpack")
@@ -1224,8 +1224,8 @@ local function playCustomSpawn(character, humanoid, animator)
 		end
 		
 		if mainPart then
-			-- Offset del teléfono respecto al brazo derecho (Y = -2 studs)
-			clonedPhone:PivotTo(rightArm.CFrame * CFrame.new(0, -2, 0) * CFrame.Angles(math.rad(-90), 0, 0))
+			-- Offset del teléfono respecto al brazo derecho (Y = -1.5 studs)
+			clonedPhone:PivotTo(rightArm.CFrame * CFrame.new(0, -1.5, 0) * CFrame.Angles(math.rad(-90), 0, 0))
 			
 			for _, part in ipairs(clonedPhone:GetDescendants()) do
 				if part:IsA("BasePart") then
