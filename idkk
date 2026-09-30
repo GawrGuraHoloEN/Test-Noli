@@ -1,4 +1,10 @@
-return {
+local RunService = game:GetService("RunService")
+local workspace = game:GetService("Workspace")
+
+local camera = workspace.CurrentCamera
+
+-- Your complete exported camera data
+local cameraData = {
 	[1] = {
 		["fov"] = 35,
 		["cframe"] = CFrame.new(2.85429382, 0.501766682, -0.816898346, 0.707725823, 0.125324994, 0.695282578, 0.000290125608, 0.984088659, -0.177677751, -0.706487179, 0.125948846, 0.696428597)
@@ -2049,3 +2055,65 @@ return {
 		["cframe"] = CFrame.new(0.0107917786, 7.28793144, 17.663578, 0.999916673, -0.00547191827, 0.0116996756, 4.65661343e-10, 0.90582484, 0.423652589, -0.012916049, -0.423617274, 0.905749202)
 	} 
 }
+
+--[[
+	Plays a camera track smoothly regardless of frame rate.
+	Returns a function that can be called to cancel the track early.
+]]
+local function playCameraTrack(trackData, fps, originCFrame)
+	fps = fps or 60
+	local totalFrames = #trackData
+	local duration = totalFrames / fps
+	
+	local startTime = os.clock()
+	local renderConnection
+	
+	camera.CameraType = Enum.CameraType.Scriptable
+	
+	-- Bind to RenderStepped to update the camera right before a frame renders
+	renderConnection = RunService.RenderStepped:Connect(function()
+		local elapsed = os.clock() - startTime
+		
+		-- Clean up when the track finishes
+		if elapsed >= duration then
+			renderConnection:Disconnect()
+			camera.CameraType = Enum.CameraType.Custom
+			return
+		end
+		
+		-- Calculate exactly which two frames we are currently between
+		local exactFrame = (elapsed * fps) + 1
+		local currentFrameIndex = math.floor(exactFrame)
+		local nextFrameIndex = math.min(currentFrameIndex + 1, totalFrames)
+		
+		local frame1 = trackData[currentFrameIndex]
+		local frame2 = trackData[nextFrameIndex]
+		
+		-- 'alpha' represents the percentage of progression between frame1 and frame2 (0 to 1)
+		local alpha = exactFrame - currentFrameIndex
+		
+		-- Smoothly interpolate the CFrame and FOV
+		local currentCFrame = frame1.cframe:Lerp(frame2.cframe, alpha)
+		local currentFOV = frame1.fov + ((frame2.fov - frame1.fov) * alpha)
+		
+		-- Apply an offset if an origin is provided
+		if originCFrame then
+			currentCFrame = originCFrame * currentCFrame
+		end
+		
+		-- Apply to the camera
+		camera.CFrame = currentCFrame
+		camera.FieldOfView = currentFOV
+	end)
+	
+	-- Return a cleanup function so the track can be canceled via code
+	return function()
+		if renderConnection.Connected then
+			renderConnection:Disconnect()
+			camera.CameraType = Enum.CameraType.Custom
+		end
+	end
+end
+
+-- Play the track at 60 FPS
+playCameraTrack(cameraData, 60)
