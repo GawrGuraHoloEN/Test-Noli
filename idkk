@@ -1,65 +1,209 @@
-game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = 0
-local player = game.Players.LocalPlayer
-repeat wait() until player.Character.Humanoid
-local humanoid = player.Character.Humanoid
-local character = player.Character or player.CharacterAdded:Wait()
-local UserInputService = game:GetService("UserInputService")
+["Ravage"] = function(params)	
+		local player : Player = params.plr;
+		local char : Model = params.char;
+		local hum : Humanoid = params.hum;
+		local root : BasePart = params.root;
 
-local soundeffect = Instance.new("Sound")
-soundeffect.SoundId = "rbxassetid://0"
-soundeffect.Parent = game.Players.LocalPlayer.Character.Torso
-soundeffect:Play()
-soundeffect.Volume = 5
+		local WindUp = Instance.new("Animation")
+		WindUp.AnimationId = "rbxassetid://"..74403586360753
+		local WindUp : AnimationTrack = hum.Animator:LoadAnimation(WindUp)
+		
+		local FullMove = Instance.new("Animation")
+		FullMove.AnimationId = "rbxassetid://"..120542043736441
+		local FullMove : AnimationTrack = hum.Animator:LoadAnimation(FullMove)
+		
+		local Victim = Instance.new("Animation")
+		Victim.AnimationId = "rbxassetid://"..103253746319429
+		
+		WindUp:Play(0)
+		WindUp:Destroy()
+		hum.WalkSpeed = 0
+		hum.JumpHeight = 0
+		root.Anchored = true
+		
+		WindUp.Ended:Connect(function()
+			hum.WalkSpeed = 16
+			hum.JumpHeight = 50
+			root.Anchored = false
+		end)
+		
+		WindUp:GetMarkerReachedSignal('Hitbox'):Connect(function()
+			local Hitbox = HitboxModule.CreateHitbox({
+				Time = 0.25;
+				Anchored = true,
+				Parent = workspace.Thrown,
+				Visible = true,
+				CFrame = root.CFrame * CFrame.new(0,0,-4),
+				Size = Vector3.new(5,7,5),
+				Weld = true,
+				p0 = root
+			})
+			local EnemyGet = HitboxModule.GetPartInBox({
+				Blacklisted = {player.Name},
+				BypassIFrame = false,
+				CFrame = Hitbox.CFrame ,
+				Size = Hitbox.Size
+			})
+			task.spawn(function()
+				for i,EnemyChar in pairs(EnemyGet) do
+					if EnemyChar.Parent then
+						if EnemyChar:IsA('Model') and  EnemyChar:GetAttribute('Dead') ~= true and EnemyChar:FindFirstChildOfClass('Humanoid') then
+							WindUp:Destroy()
+							local EnemyHum : Humanoid = EnemyChar:FindFirstChildOfClass('Humanoid')
+							local EnemyRoot : BasePart = EnemyChar:FindFirstChild('HumanoidRootPart')
+							Damage.Damage({
+								Damage = 0.2,
+								char = char,
+								Target = EnemyChar,
+								Ult = false,
+								Time = 0.25,
+								GivesObject = true
+							})
+							FullMove:Play(0)
+							local Victim : AnimationTrack = EnemyHum.Animator:LoadAnimation(Victim)
+							Victim:Play(0)
+							root.Anchored = true
+							hum.WalkSpeed = 0
+							EnemyHum.WalkSpeed = 0
+							hum.JumpHeight = 0
+							EnemyHum.JumpHeight = 0
+							spawn(function()
+								EnemyRoot.CFrame = root.CFrame * CFrame.new(0,0,-3) * CFrame.Angles(0,math.rad(180),0)
+								task.wait()
+								root.CFrame = EnemyRoot.CFrame * CFrame.new(0,0,-3) * CFrame.Angles(0,math.rad(180),0)
+								
+								hum.AutoRotate = false
+								EnemyHum.AutoRotate = false
+							end)
+							
+							Replication:FireAllClients({
+								Effect = "KJJumpBack",
+								Character = EnemyChar,						
 
-local soundeffect = Instance.new("Sound")
-soundeffect.SoundId = "rbxassetid://0"
-soundeffect.Parent = game.Players.LocalPlayer.Character.Torso
-soundeffect:Play()
-soundeffect.Volume = 5
+							},{})
+							
+							FullMove:GetMarkerReachedSignal("BarageStart"):Connect(function()
+								Replication:FireAllClients({
+									Effect = "KJPunch",
+									Character = char,
+									Start = EnemyRoot.CFrame,
+									DustOffset = root.CFrame,
+									MeshImpactOffset = EnemyRoot.CFrame,
+									
+									
+								},{})
+							end)
+							
+							FullMove:GetMarkerReachedSignal("BarageEnd"):Connect(function()
+								Replication:FireAllClients({
+									Effect = "KJPunch",
+									Character = char,
+									Start = EnemyRoot.CFrame,
+									DustOffset = root.CFrame,
+									MeshImpactOffset = EnemyRoot.CFrame,
 
-local anim = Instance.new("Animation")
-anim.AnimationId = "rbxassetid://18447913645"
 
-local playAnim = humanoid:LoadAnimation(anim)
-anim.AnimationId = "rbxassetid://0"
-playAnim:Play()
+								},{})
+							end)
+							
+							FullMove:GetMarkerReachedSignal("BodyStrike"):Connect(function()
+								Damage.Damage({
+									Damage = 0.1,
+									char = char,
+									Target = EnemyChar,
+									Ult = false,
+									Time = 0,
+									GivesObject = false
+								})
+							
+							end)
+							FullMove:GetMarkerReachedSignal('Uppercut'):Connect(function()
+								Replication:FireAllClients({
+									Effect = "SpinnerDownwardMesh",
+									char = char,						
 
-local CutsceneName = "KJ"
-local Speed = 60
+								},{})
+								Damage.Damage({
+									Damage = 0.5,
+									char = char,
+									Target = EnemyChar,
+									Ult = false,
+									Time = 0,
+									GivesObject = false
+								})
+							end)
+							FullMove:GetMarkerReachedSignal('DoSpin'):Connect(function()
 
--- don't change anything here unless you know
-local function s(d)
-    if not d then return end
+								Replication:FireAllClients({
+									Effect = "KJSpin",
+									Character = char,	
+									SpinParticlesOffset = root.CFrame,
+									BeamOffset = root.CFrame * CFrame.new(0,0,12.5)
 
-    local o = workspace.CurrentCamera.CFrame
-    local e = 0
-    local con
+								},{})
+							end)
+							FullMove:GetMarkerReachedSignal('Kick'):Connect(function()
+								Replication:FireAllClients({
+									Effect = "KJKick",
+									Character = char,						
+									ParticleOffset = char:FindFirstChild("Right Leg").CFrame,
+									root = root,
+									MeshOffset = char:FindFirstChild("Right Leg").CFrame
+								},{})
+								
+								EnemyHum.WalkSpeed = 16
+								EnemyHum.JumpHeight = 50
+								EnemyHum.AutoRotate = true
+								EnemyRoot.Anchored = false
+								
+								Ragdoll.Ragdoll(EnemyChar,true,3.5)
+								if EnemyHum.Health <= 15 then
+									KnockbackModule.CreateKnockback({
+										DealDamage = true,
+										Character = EnemyChar,
+										Duration = 0.3,
+										Damage = 30,
+										Velocity = -200,
+										UpVector = 120,
+									})	
+								elseif EnemyHum.Health >= 15 then
+									KnockbackModule.CreateKnockback({
+										DealDamage = true,
+										Character = EnemyChar,
+										Duration = 0.3,
+										Damage = 30,
+										Velocity = -80,
+										UpVector = 60,
+									})	
+								end	
+							end)
+							
+							FullMove.Ended:Connect(function()
+								hum.AutoRotate = true
+								EnemyHum.AutoRotate = true
+								root.Anchored = false
+								
+								hum.WalkSpeed = 16
+								EnemyHum.WalkSpeed = 16
+								hum.JumpHeight = 50
+								EnemyHum.JumpHeight = 50
+							end)
+						end
+					end
+				end
+			end)
+		end)
 
-    game.Players.LocalPlayer.Character.Humanoid.AutoRotate = false
-    workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
 
-    con = game:GetService("RunService").RenderStepped:Connect(function(dt)
-        e = e + dt * Speed
-        local k = d[math.ceil(e)]
 
-        if k then
-            game:GetService("TweenService"):Create(workspace.CurrentCamera, TweenInfo.new(0.0005, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
-                CFrame = game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame * k.cframe,
-                FieldOfView = k.fov
-            }):Play()
-        else
-            con:Disconnect()
-            workspace.CurrentCamera.FieldOfView = 70
-            game.Players.LocalPlayer.Character.Humanoid.AutoRotate = true
-            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-            workspace.CurrentCamera.CFrame = o
-        end
-    end)
-end
 
-local m = require(game.ReplicatedStorage.Cutscenes["KJ"])
 
-local d = m
-if d then
-    s(d)
-end
+
+
+
+
+	
+		
+		
+		
+	end,
