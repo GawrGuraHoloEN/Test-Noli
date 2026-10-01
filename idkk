@@ -1,3 +1,115 @@
+local Replication = game.ReplicatedStorage.Replication
+local HitboxModule = require(script.Parent.Modules.HitboxModule)
+local Ragdoll = require(script.Parent.Modules.Ragdoll)
+local Damage = require(script.Parent.Modules.Damage)
+local CounterModule = require(script.Parent.Modules.Counter)
+
+local Players = game:GetService('Players')
+
+
+local HitboxTransparency = 1
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local WeldModule = require(game.ServerScriptService.Modules.WeldModule)
+local KnockbackModule = require(ReplicatedStorage.Modules.KnockbackModule)
+
+if game['Run Service']:IsStudio() then
+	HitboxTransparency = 0.1
+end
+local BlackList = {
+	workspace.Live,
+	workspace.Thrown
+}
+
+local function Emit(Part: Part?)
+		if Part:IsA('ParticleEmitter') then
+			Part:Emit(Part:GetAttribute('EmitCount'))
+		else
+			for _,v in Part:GetDescendants() do
+				if v:IsA('ParticleEmitter') then
+					v:Emit(v:GetAttribute('EmitCount'))
+				end
+			end
+	end
+end
+
+local function Flashing(Character: Model, Time: number)
+	for _, Part: Part? in Character:GetDescendants() do
+		if Part:GetAttribute("NoTransparancyChange") ~= true and Part:IsA("Part") and typeof(Part.Transparency) ~= 'NumberSequence' and Part.Transparency == 0 then
+			Part:AddTag('BecomeVisible')
+
+			Part.Transparency = 1
+		end
+	end
+
+	task.wait(Time)
+
+	for _, Part: Part? in Character:GetDescendants() do
+		if Part:HasTag('BecomeVisible') then
+			Part:RemoveTag('BecomeVisible')
+
+			Part.Transparency = 0
+		end
+	end
+end
+
+local function Share(Sharename,params)
+	local Result = shared[Sharename](params)
+	wait()
+	return Result
+end
+
+local function AddAcc(tableinfo)
+		local E = Instance.new('Folder',tableinfo.Parent or nil)
+		E.Name = tableinfo.Name or 'Nil'
+		E:SetAttribute('Owner',tableinfo.Owner.Name or 'NoOwner')
+		if tableinfo.Name == 'Slowalk' then
+			E:SetAttribute('Walk',tableinfo.Walk)
+			E:SetAttribute('Jump',tableinfo.Jump)
+			E:SetAttribute('Div',tableinfo.Walk)
+		end
+		if tableinfo.Name == 'Freeze' then
+			E:SetAttribute(tableinfo.NoStop)
+		end
+		if tableinfo.Time ~= nil then
+			task.delay(tableinfo.Time,function()
+				if E.Parent == tableinfo.Parent then
+					E:Destroy()
+				end
+			end)
+		end
+	return E
+end
+
+local function FacePlayer(playerPosition,enemy)
+	local enemyTorso =  enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChild("RootPart")  or enemy:FindFirstChild("Torso")   or enemy
+	if enemyTorso then
+		local lookDirection = (playerPosition - enemyTorso.Position).unit
+		local upVector = Vector3.new(0, 1, 0) 
+		local newCFrame = CFrame.lookAt(enemyTorso.Position, playerPosition, upVector)
+		enemyTorso.CFrame = newCFrame
+	end
+end
+
+local BlackList = {
+	workspace.Live,
+	workspace.Thrown
+}
+
+local par = RaycastParams.new();
+par.FilterDescendantsInstances = {workspace.Live,workspace.Thrown,workspace.Map}--.Baseplate}
+par.IgnoreWater = true
+par.RespectCanCollide = true
+par.FilterType = Enum.RaycastFilterType.Exclude
+
+local parOther = RaycastParams.new();
+parOther.FilterDescendantsInstances = {workspace.Live,workspace.Thrown}
+parOther.IgnoreWater = true
+parOther.RespectCanCollide = true
+parOther.FilterType = Enum.RaycastFilterType.Exclude
+
+                                                              Ravage skill move:
+
 ["Ravage"] = function(params)	
 		local player : Player = params.plr;
 		local char : Model = params.char;
