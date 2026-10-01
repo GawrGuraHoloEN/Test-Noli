@@ -334,7 +334,7 @@ local function forceDropkickMovement(track, token)
 				end
 			end
 
-			if os.clock() - lastSpeedlineTime >= 0.1 then
+			if os.clock() - lastSpeedlineTime >= 0.01 then
 				lastSpeedlineTime = os.clock()
 				
 				local kjEffects = getKJEffects()
