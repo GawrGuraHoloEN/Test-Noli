@@ -28,6 +28,7 @@ local forcedMovementToken = 0
 local savedWalkSpeed = nil
 local savedAutoRotate = nil
 local savedAnchored = nil
+local wallComboCloneHandle = nil
 local savedCameraMaxZoom = nil
 local savedCameraMinZoom = nil
 local playerControls = nil
@@ -835,6 +836,12 @@ function stopCurrent()
 	clearVfx()
 	removeOldWallComboGui()
 	stopCutscene()
+
+	-- Si el movimiento se interrumpe, el clon del Wall Combo también se elimina
+	if wallComboCloneHandle then
+		wallComboCloneHandle.destroy()
+		wallComboCloneHandle = nil
+	end
 end
 
 ----------------------------------------------------------------
@@ -1408,8 +1415,9 @@ local function spawnWallComboClone(token)
 
 	place()
 
-	-- Tiempo de vida propio (sin Debris, que puede eliminar objetos antes si se llena)
-	task.delay(WALL_COMBO_CLONE_LIFETIME, function()
+	-- Elimina el clon (por tiempo de vida o por interrupción). Se puede llamar varias veces sin problema.
+	handle.destroy = function()
+		if expired then return end
 		expired = true
 
 		if handle.instance then
@@ -1417,7 +1425,16 @@ local function spawnWallComboClone(token)
 			handle.instance = nil
 		end
 		template:Destroy()
-	end)
+
+		if wallComboCloneHandle == handle then
+			wallComboCloneHandle = nil
+		end
+	end
+
+	wallComboCloneHandle = handle
+
+	-- Tiempo de vida propio (sin Debris, que puede eliminar objetos antes si se llena)
+	task.delay(WALL_COMBO_CLONE_LIFETIME, handle.destroy)
 
 	return handle
 end
@@ -1783,6 +1800,22 @@ addMove("Wall Combo", function(token)
 	playCutscene(getCutsceneData(), token)
 	local clone = spawnWallComboClone(token)
 	playWallComboVfx(clone, token)
+
+	-- Si la animación se detiene antes de terminar (interrupción), el clon se elimina
+	if clone then
+		local stoppedConn = nil
+		stoppedConn = wallComboTrack.Stopped:Connect(function()
+			if stoppedConn then
+				stoppedConn:Disconnect()
+				stoppedConn = nil
+			end
+
+			local isNaturalEnd = (wallComboTrack.Length > 0) and (wallComboTrack.TimePosition >= wallComboTrack.Length - 0.15)
+			if not isNaturalEnd then
+				clone.destroy()
+			end
+		end)
+	end
 end)
 
 ----------------------------------------------------------------
