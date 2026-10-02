@@ -10,6 +10,7 @@ local RunService = game:GetService("RunService")
 local StarterGui = game:GetService("StarterGui")
 local SoundService = game:GetService("SoundService")
 local GuiService = game:GetService("GuiService") 
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -26,6 +27,9 @@ local forcedMovementConnection = nil
 local forcedMovementToken = 0
 local savedWalkSpeed = nil
 local savedAutoRotate = nil
+local savedAnchored = nil
+local savedCameraMaxZoom = nil
+local savedCameraMinZoom = nil
 local playerControls = nil
 
 -- Variable para saber si se reprodujo la animación al hacer spawn
@@ -33,6 +37,15 @@ local hasCustomSpawnPlayed = false
 
 local ULT_MUSIC_ID = "17150550093"
 local WALL_COMBO_ANIMATION_ID = "18447913645"
+
+-- 20-20-20 Dropkick: cámara
+local DROPKICK_SPEEDLINESSTUFF_OFFSET = 100  -- studs por delante del jugador para el VFX speedlinesandstuff
+local DROPKICK_CAMERA_DISTANCE = 20      -- distancia final de la cámara al jugador (studs)
+local DROPKICK_CAMERA_ZOOM_TIME = 1      -- duración del acercamiento (segundos)
+local DROPKICK_DASH_END = 6              -- segundo en que termina el dash principal (speedlines se detiene aquí)
+local DROPKICK_EXTRA_TIME = 1            -- segundo extra: fade de partículas y velocidad reducida
+local DROPKICK_EXTRA_WALKSPEED = 20      -- velocidad del jugador durante el segundo extra
+local DROPKICK_CAMERA_START = 1          -- segundo en el que empieza (1 s antes del movimiento forzado, que inicia en el 2)
 
 -- Nombre del VFX final.
 local FINAL_VFX_NAME = "fine...Emit2"
@@ -136,8 +149,25 @@ local function stopForcedMovement()
 		end
 	end
 
+	if savedAnchored ~= nil then
+		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+		if rootPart then
+			rootPart.Anchored = savedAnchored
+		end
+	end
+
+	if savedCameraMaxZoom ~= nil then
+		player.CameraMaxZoomDistance = savedCameraMaxZoom
+		savedCameraMaxZoom = nil
+	end
+	if savedCameraMinZoom ~= nil then
+		player.CameraMinZoomDistance = savedCameraMinZoom
+		savedCameraMinZoom = nil
+	end
+
 	savedWalkSpeed = nil
 	savedAutoRotate = nil
+	savedAnchored = nil
 
 	local controls = getPlayerControls()
 	if controls then
@@ -160,40 +190,77 @@ local function force20SeriesAltMovement(track, token)
 	end
 
 	humanoid.WalkSpeed = 5
-	humanoid.AutoRotate = false
+	humanoid.AutoRotate = true -- permite girar con primera persona / shiftlock
 
 	forcedMovementToken += 1
 	local movementToken = forcedMovementToken
 	local startTime = os.clock()
+	local movementFinished = false
+
+	-- Si la animacion se interrumpe antes de terminar, se cancela todo (igual que el Dropkick)
+	local trackStoppedConn = nil
+	trackStoppedConn = track.Stopped:Connect(function()
+		if trackStoppedConn then
+			trackStoppedConn:Disconnect()
+			trackStoppedConn = nil
+		end
+
+		local isNaturalEnd = (track.Length > 0) and (track.TimePosition >= track.Length - 0.15)
+		if not isNaturalEnd and token == sequence and movementToken == forcedMovementToken then
+			local currentStop = stopCurrent
+			if currentStop then
+				currentStop()
+			end
+		end
+	end)
 
 	forcedMovementConnection = RunService.RenderStepped:Connect(function()
 		local elapsed = os.clock() - startTime
 
 		if token ~= sequence
 			or movementToken ~= forcedMovementToken
-			or elapsed >= 1.8
 			or not character.Parent
 			or not humanoid.Parent
 			or not root.Parent
 			or not track.IsPlaying then
 
+			if trackStoppedConn then
+				trackStoppedConn:Disconnect()
+				trackStoppedConn = nil
+			end
+
 			stopForcedMovement()
 			return
 		end
 
-		if humanoid.WalkSpeed ~= 5 then
-			humanoid.WalkSpeed = 5
-		end
-
-		humanoid.AutoRotate = false
-
+		-- Ninguna otra animacion se combina con esta mientras dure
 		for _, otherTrack in ipairs(animator:GetPlayingAnimationTracks()) do
 			if otherTrack ~= track then
 				otherTrack:Stop(0)
+				otherTrack:AdjustWeight(0)
 			end
 		end
 
-		humanoid:Move(root.CFrame.LookVector, false)
+		if elapsed < 1.8 then
+			humanoid.WalkSpeed = 5
+			humanoid.AutoRotate = true
+			humanoid:Move(root.CFrame.LookVector, false)
+		elseif not movementFinished then
+			-- Termina el avance forzado: se devuelve el control, pero se siguen bloqueando otras animaciones
+			movementFinished = true
+
+			if savedWalkSpeed ~= nil then
+				humanoid.WalkSpeed = savedWalkSpeed
+			end
+			if savedAutoRotate ~= nil then
+				humanoid.AutoRotate = savedAutoRotate
+			end
+
+			local c = getPlayerControls()
+			if c then
+				c:Enable()
+			end
+		end
 	end)
 end
 
@@ -218,9 +285,21 @@ local function forceDropkickMovement(track, token)
 	local hasStartedDash = false
 	local lastSpeedlineTime = 0
 	local activeVfx = {} 
+	local activeOffsets = {} -- distancia hacia adelante de cada VFX persistente
 	
 	local thingVfxInstance = nil 
 	local hasDisabledThing = false
+
+	-- Fade de partículas durante el segundo extra
+	local fadeStarted = false
+	local fadeStartTime = 0
+	local fadeEmitters = {}
+
+	-- Cámara: acercamiento suave + bloqueo del zoom
+	local cameraZoomStarted = false
+	local cameraZoomStartTime = 0
+	local cameraZoomFrom = 0
+	local cameraZoomTarget = 0
 
 	local trackStoppedConn = nil
 	trackStoppedConn = track.Stopped:Connect(function()
@@ -243,7 +322,7 @@ local function forceDropkickMovement(track, token)
 
 		if token ~= sequence
 			or movementToken ~= forcedMovementToken
-			or elapsed >= 6
+			or elapsed >= DROPKICK_DASH_END + DROPKICK_EXTRA_TIME
 			or not character.Parent
 			or not humanoid.Parent
 			or not root.Parent
@@ -271,6 +350,31 @@ local function forceDropkickMovement(track, token)
 			end
 		end
 
+		-- 1 s antes del movimiento forzado: acercar la cámara suavemente y bloquear el zoom
+		if elapsed >= DROPKICK_CAMERA_START then
+			local camera = workspace.CurrentCamera
+
+			if not cameraZoomStarted and camera then
+				cameraZoomStarted = true
+				cameraZoomStartTime = os.clock()
+				cameraZoomFrom = (camera.CFrame.Position - camera.Focus.Position).Magnitude
+				cameraZoomTarget = math.min(DROPKICK_CAMERA_DISTANCE, cameraZoomFrom)
+
+				savedCameraMaxZoom = player.CameraMaxZoomDistance
+				savedCameraMinZoom = player.CameraMinZoomDistance
+			end
+
+			if cameraZoomStarted then
+				local alpha = math.clamp((os.clock() - cameraZoomStartTime) / DROPKICK_CAMERA_ZOOM_TIME, 0, 1)
+				local eased = TweenService:GetValue(alpha, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+				local distance = cameraZoomFrom + (cameraZoomTarget - cameraZoomFrom) * eased
+
+				-- El máximo baja poco a poco (acerca la cámara) y se queda ahí, así no se puede alejar
+				player.CameraMinZoomDistance = math.min(savedCameraMinZoom or 0.5, distance)
+				player.CameraMaxZoomDistance = distance
+			end
+		end
+
 		if elapsed < 2 then
 			humanoid.WalkSpeed = 0
 			humanoid.AutoRotate = true 
@@ -283,19 +387,22 @@ local function forceDropkickMovement(track, token)
 					local fxStuff = kjEffects:FindFirstChild("speedlinesandstuff")
 					local fxThing = fxStuff and fxStuff:FindFirstChild("thespeedthingunderultik")
 
-					local function spawnPersistentVfx(template)
+					local function spawnPersistentVfx(template, forwardOffset)
 						if not template then return nil end
+						forwardOffset = forwardOffset or 0
 						local clone = template:Clone()
 						
 						if clone:IsA("Attachment") then
 							clone.Parent = root
-							clone.Position = Vector3.zero
+							clone.Position = Vector3.new(0, 0, -forwardOffset)
 						elseif clone:IsA("BasePart") then
-							clone.CFrame = root.CFrame
+							clone.CFrame = root.CFrame * CFrame.new(0, 0, -forwardOffset)
 							clone.Parent = workspace
 						else
 							clone.Parent = root
 						end
+
+						activeOffsets[clone] = forwardOffset
 						
 						for _, em in ipairs(clone:GetDescendants()) do
 							if em:IsA("ParticleEmitter") then
@@ -308,7 +415,7 @@ local function forceDropkickMovement(track, token)
 						return clone
 					end
 
-					spawnPersistentVfx(fxStuff)
+					spawnPersistentVfx(fxStuff, DROPKICK_SPEEDLINESSTUFF_OFFSET)
 					thingVfxInstance = spawnPersistentVfx(fxThing)
 				end
 			end
@@ -324,17 +431,57 @@ local function forceDropkickMovement(track, token)
 				end
 			end
 
-			humanoid.WalkSpeed = 250
+			local inExtraTime = elapsed >= DROPKICK_DASH_END
+
+			if inExtraTime then
+				-- Segundo extra: los 2 VFX persistentes (no speedlines) pasan de visibles a invisibles suavemente
+				if not fadeStarted then
+					fadeStarted = true
+					fadeStartTime = os.clock()
+
+					for _, vfx in ipairs(activeVfx) do
+						if vfx and vfx.Parent then
+							for _, descendant in ipairs(vfx:GetDescendants()) do
+								-- GetDescendants busca a cualquier profundidad: ParticleEmitter y Beam
+								if descendant:IsA("ParticleEmitter") or descendant:IsA("Beam") then
+									table.insert(fadeEmitters, {
+										emitter = descendant,
+										keypoints = descendant.Transparency.Keypoints,
+									})
+								end
+							end
+						end
+					end
+				end
+
+				local alpha = math.clamp((os.clock() - fadeStartTime) / DROPKICK_EXTRA_TIME, 0, 1)
+
+				for _, data in ipairs(fadeEmitters) do
+					if data.emitter.Parent then
+						local newKeypoints = {}
+						for index, keypoint in ipairs(data.keypoints) do
+							newKeypoints[index] = NumberSequenceKeypoint.new(
+								keypoint.Time,
+								keypoint.Value + (1 - keypoint.Value) * alpha,
+								keypoint.Envelope
+							)
+						end
+						data.emitter.Transparency = NumberSequence.new(newKeypoints)
+					end
+				end
+			end
+
+			humanoid.WalkSpeed = inExtraTime and DROPKICK_EXTRA_WALKSPEED or 250
 			humanoid.AutoRotate = true 
 			humanoid:Move(root.CFrame.LookVector, false)
 
 			for _, vfx in ipairs(activeVfx) do
 				if vfx and vfx.Parent and vfx:IsA("BasePart") then
-					vfx.CFrame = root.CFrame
+					vfx.CFrame = root.CFrame * CFrame.new(0, 0, -(activeOffsets[vfx] or 0))
 				end
 			end
 
-			if os.clock() - lastSpeedlineTime >= 0.01 then
+			if not inExtraTime and os.clock() - lastSpeedlineTime >= 0.01 then
 				lastSpeedlineTime = os.clock()
 				
 				local kjEffects = getKJEffects()
@@ -353,7 +500,7 @@ local function forceDropkickMovement(track, token)
 					end
 					
 					table.insert(currentVfx, slClone)
-					Debris:AddItem(slClone, 1)
+					Debris:AddItem(slClone, 0.2)
 					
 					for _, emitter in ipairs(slClone:GetDescendants()) do
 						if emitter:IsA("ParticleEmitter") then
@@ -366,6 +513,74 @@ local function forceDropkickMovement(track, token)
 			end
 		end
 	end)
+end
+
+local function freezePlayerDuringAnimation(track, token, unanchorAfter)
+	stopForcedMovement()
+
+	local character, humanoid = getCharacter()
+	local root = getRoot(character)
+
+	savedWalkSpeed = humanoid.WalkSpeed
+	savedAutoRotate = humanoid.AutoRotate
+
+	local controls = getPlayerControls()
+	if controls then
+		controls:Disable()
+	end
+
+	humanoid.WalkSpeed = 0
+	humanoid.AutoRotate = false
+
+	-- Anclar al jugador
+	savedAnchored = root.Anchored
+	root.Anchored = true
+
+	forcedMovementToken += 1
+	local movementToken = forcedMovementToken
+	local lockedRotation = root.CFrame.Rotation
+	local bindName = "FreezePlayerDuringAnimation"
+	local startTime = os.clock()
+	local hasUnanchored = false
+
+	-- Se ejecuta con la prioridad más tardía para que ni shiftlock ni primera persona puedan girar al personaje
+	RunService:BindToRenderStep(bindName, Enum.RenderPriority.Last.Value, function()
+		if token ~= sequence
+			or movementToken ~= forcedMovementToken
+			or not character.Parent
+			or not humanoid.Parent
+			or not root.Parent
+			or not track.IsPlaying then
+
+			stopForcedMovement()
+			return
+		end
+
+		humanoid.WalkSpeed = 0
+		humanoid.AutoRotate = false
+
+		-- Pasado el tiempo indicado, el jugador se desancla (sigue congelado hasta que acabe la animación)
+		if unanchorAfter and os.clock() - startTime >= unanchorAfter then
+			if not hasUnanchored then
+				hasUnanchored = true
+				root.Anchored = false
+			end
+		else
+			root.Anchored = true
+		end
+
+		root.CFrame = CFrame.new(root.Position) * lockedRotation
+		root.AssemblyAngularVelocity = Vector3.zero
+	end)
+
+	-- stopForcedMovement() llama a :Disconnect(), así que se desvincula el RenderStep aquí
+	forcedMovementConnection = {
+		Disconnect = function()
+			pcall(function()
+				RunService:UnbindFromRenderStep(bindName)
+			end)
+		end,
+	}
 end
 
 ----------------------------------------------------------------
@@ -413,6 +628,148 @@ local function stopUltMusic()
 	end
 end
 
+----------------------------------------------------------------
+-- Cutscene de cámara (Wall Combo)
+----------------------------------------------------------------
+
+local CUTSCENE_NAME = "KJ"
+local CUTSCENE_SPEED = 60
+local CUTSCENE_BIND_NAME = "WallComboCutscene"
+
+local cutsceneBound = false
+local cutsceneState = nil
+local cutsceneData = nil
+
+local function getCutsceneData()
+	if cutsceneData then
+		return cutsceneData
+	end
+
+	local folder = ReplicatedStorage:FindFirstChild("Cutscenes")
+	local moduleScript = folder and folder:FindFirstChild(CUTSCENE_NAME)
+	if not moduleScript then
+		return nil
+	end
+
+	local success, result = pcall(require, moduleScript)
+	if success then
+		cutsceneData = result
+	end
+
+	return cutsceneData
+end
+
+local function stopCutscene()
+	if cutsceneBound then
+		cutsceneBound = false
+		pcall(function()
+			RunService:UnbindFromRenderStep(CUTSCENE_BIND_NAME)
+		end)
+	end
+
+	if not cutsceneState then
+		return
+	end
+
+	local state = cutsceneState
+	cutsceneState = nil
+
+	local camera = workspace.CurrentCamera
+	if camera then
+		camera.FieldOfView = state.fov
+		camera.CameraType = Enum.CameraType.Custom
+		camera.CFrame = state.cframe
+	end
+
+	-- Restaurar shiftlock / primera persona
+	pcall(function()
+		player.DevEnableMouseLock = state.mouseLockEnabled
+		player.CameraMode = state.cameraMode
+	end)
+	UserInputService.MouseBehavior = state.mouseBehavior
+
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.AutoRotate = state.autoRotate
+		humanoid.CameraOffset = state.cameraOffset
+	end
+end
+
+local function playCutscene(data, token)
+	if not data then return end
+
+	stopCutscene()
+
+	local camera = workspace.CurrentCamera
+	local _, humanoid = getCharacter()
+	if not camera or not humanoid then return end
+
+	cutsceneState = {
+		cframe = camera.CFrame,
+		fov = camera.FieldOfView,
+		autoRotate = humanoid.AutoRotate,
+		cameraOffset = humanoid.CameraOffset,
+		mouseBehavior = UserInputService.MouseBehavior,
+		mouseLockEnabled = player.DevEnableMouseLock,
+		cameraMode = player.CameraMode,
+	}
+
+	local elapsed = 0
+
+	humanoid.AutoRotate = false
+	camera.CameraType = Enum.CameraType.Scriptable
+
+	-- Bloquear shiftlock y primera persona mientras dura la cutscene
+	pcall(function()
+		player.DevEnableMouseLock = false
+		player.CameraMode = Enum.CameraMode.Classic
+	end)
+	humanoid.CameraOffset = Vector3.zero
+	UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+
+	cutsceneBound = true
+
+	-- Se ejecuta justo DESPUÉS del script de cámara de Roblox, así nada puede sobreescribirla
+	RunService:BindToRenderStep(CUTSCENE_BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function(dt)
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+
+		-- Si se interrumpe el movimiento o no hay personaje, se cancela y se restaura la cámara
+		if token ~= sequence or not root then
+			stopCutscene()
+			return
+		end
+
+		-- Mantener bloqueado lo que shiftlock / primera persona intenten cambiar
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		end
+		if humanoid.AutoRotate then
+			humanoid.AutoRotate = false
+		end
+		if humanoid.CameraOffset ~= Vector3.zero then
+			humanoid.CameraOffset = Vector3.zero
+		end
+		if camera.CameraType ~= Enum.CameraType.Scriptable then
+			camera.CameraType = Enum.CameraType.Scriptable
+		end
+
+		elapsed = elapsed + dt * CUTSCENE_SPEED
+		local frame = data[math.ceil(elapsed)]
+
+		if frame then
+			TweenService:Create(camera, TweenInfo.new(0.0005, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+				CFrame = root.CFrame * frame.cframe,
+				FieldOfView = frame.fov,
+			}):Play()
+		else
+			-- Terminó la cutscene
+			stopCutscene()
+		end
+	end)
+end
+
 function stopCurrent()
 	sequence += 1
 	stopForcedMovement()
@@ -442,6 +799,7 @@ function stopCurrent()
 
 	clearVfx()
 	removeOldWallComboGui()
+	stopCutscene()
 end
 
 ----------------------------------------------------------------
@@ -457,7 +815,7 @@ local function startUltMusic(token)
 	local sound = Instance.new("Sound")
 	sound.Name = "UltMusic"
 	sound.SoundId = "rbxassetid://" .. ULT_MUSIC_ID
-	sound.Volume = 1
+	sound.Volume = 2
 	sound.Looped = true
 	sound.Parent = getSoundParent(character)
 
@@ -502,7 +860,7 @@ local function createSound(id, token)
 
 	local sound = Instance.new("Sound")
 	sound.SoundId = "rbxassetid://" .. tostring(id)
-	sound.Volume = 1
+	sound.Volume = 2
 	sound.Parent = getSoundParent(character)
 
 	table.insert(currentSounds, sound)
@@ -578,6 +936,159 @@ local function play20SeriesVfx(track, token)
 
 	emitVfx("fine...Emit2OG", 5, token)
 	emitVfx(FINAL_VFX_NAME, 5, token)
+end
+
+----------------------------------------------------------------
+-- VFX que siguen al HumanoidRootPart (Swift Sweep)
+----------------------------------------------------------------
+
+local SWEEP_VFX_OFFSET_DOWN = 2      -- studs por debajo del HumanoidRootPart
+local SWEEP_ROTATE_START = 90         -- grados en Y al aparecer (a la derecha del jugador)
+local SWEEP_ROTATE_END = -90          -- grados en Y tras el volteo (a la izquierda del jugador)
+local SWEEP_FLIP_TIME = 0.2          -- el volteo termina justo antes de que el decal se desvanezca
+local PARTICLE_SPINNER_DURATION = 5
+local SWEEP_DECAL_ROTATE_OFFSET = 180     -- giro extra del decal (SweepCresc) para que aparezca enfrente y no detrás del jugador
+
+-- Ángulo actual en Y (grados) según el tiempo transcurrido desde que aparecieron los VFX
+local function getSweepAngle(state, reversed)
+	local alpha = math.clamp((os.clock() - state.startTime) / SWEEP_FLIP_TIME, 0, 1)
+	local startAngle = reversed and SWEEP_ROTATE_END or SWEEP_ROTATE_START
+	local endAngle = reversed and SWEEP_ROTATE_START or SWEEP_ROTATE_END
+	local offset = reversed and SWEEP_DECAL_ROTATE_OFFSET or 0
+	return startAngle + (endAngle - startAngle) * alpha + offset
+end
+
+local function attachVfxToRoot(name, token, state, reversed)
+	if token ~= sequence then return nil end
+
+	local kjEffects = getKJEffects()
+	local template = kjEffects and kjEffects:FindFirstChild(name)
+	if not template then return nil end
+
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+
+	local object = template:Clone()
+
+	-- Evitar bucles: sin emisión continua ni sonidos en loop
+	for _, descendant in ipairs(object:GetDescendants()) do
+		if descendant:IsA("ParticleEmitter") then
+			descendant.Enabled = false
+		elseif descendant:IsA("Sound") then
+			descendant.Looped = false
+		end
+	end
+
+	-- "top" es lo que se mueve y se destruye (el propio VFX o una pieza contenedora)
+	local top = object
+	local setCFrame
+
+	if object:IsA("BasePart") then
+		object.Anchored = true
+		object.CanCollide = false
+		setCFrame = function(cf) object.CFrame = cf end
+	elseif object:IsA("Model") then
+		for _, part in ipairs(object:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = true
+				part.CanCollide = false
+			end
+		end
+		setCFrame = function(cf) object:PivotTo(cf) end
+	else
+		-- Attachment u otro tipo: se mete dentro de una pieza invisible
+		local holder = Instance.new("Part")
+		holder.Name = name .. "_Holder"
+		holder.Size = Vector3.one * 0.1
+		holder.Transparency = 1
+		holder.Anchored = true
+		holder.CanCollide = false
+		holder.CanQuery = false
+		holder.CanTouch = false
+		object.Parent = holder
+		top = holder
+		setCFrame = function(cf) holder.CFrame = cf end
+	end
+
+	local function update()
+		local cf = CFrame.new(root.Position - Vector3.new(0, SWEEP_VFX_OFFSET_DOWN, 0))
+			* root.CFrame.Rotation
+			* CFrame.Angles(0, math.rad(getSweepAngle(state, reversed)), 0)
+		setCFrame(cf)
+	end
+
+	update()
+	top.Parent = workspace
+	table.insert(currentVfx, top)
+
+	-- Sigue al HumanoidRootPart (a 5 studs abajo) mientras exista
+	local conn
+	conn = RunService.RenderStepped:Connect(function()
+		if not top.Parent or not root.Parent or token ~= sequence then
+			conn:Disconnect()
+			return
+		end
+		update()
+	end)
+
+	return top
+end
+
+local function playSweepCresc(token, state)
+	-- SweepCresc gira en sentido inverso para que el barrido no se vea en reversa
+	local object = attachVfxToRoot("SweepCresc", token, state, true)
+	if not object then return end
+
+	local decal = object:FindFirstChildWhichIsA("Decal", true)
+	if not decal then
+		-- Si no hay decal, se elimina igual tras 0.25 s
+		task.delay(0.25, function()
+			if object and object.Parent then object:Destroy() end
+		end)
+		return
+	end
+
+	-- Aparece visible de golpe (0.7) y luego vuelve a 1 con un tween
+	decal.Transparency = 0.7
+	task.wait(0.2)
+
+	if token ~= sequence or not decal.Parent then
+		if object and object.Parent then object:Destroy() end
+		return
+	end
+
+	local tween = TweenService:Create(
+		decal,
+		TweenInfo.new(0.1, Enum.EasingStyle.Linear),
+		{ Transparency = 1 }
+	)
+	tween:Play()
+	tween.Completed:Wait()
+
+	if object and object.Parent then
+		object:Destroy()
+	end
+end
+
+-- Emite UNA sola vez (sin bucle). Si el emisor tiene el atributo "EmitCount" lo usa.
+local function emitOnce(object)
+	for _, emitter in ipairs(object:GetDescendants()) do
+		if emitter:IsA("ParticleEmitter") then
+			emitter.Enabled = false
+			emitter:Emit(emitter:GetAttribute("EmitCount") or 1)
+		end
+	end
+end
+
+local function playParticleSpinner(token, state)
+	local object = attachVfxToRoot("particlespinner", token, state)
+	if not object then return end
+
+	emitOnce(object)
+
+	-- Sigue al HumanoidRootPart y se elimina a los 5 s
+	Debris:AddItem(object, PARTICLE_SPINNER_DURATION)
 end
 
 ----------------------------------------------------------------
@@ -724,6 +1235,299 @@ local function showWallComboDecals(token)
 end
 
 ----------------------------------------------------------------
+-- Clon de otro jugador (Wall Combo)
+----------------------------------------------------------------
+
+local WALL_COMBO_CLONE_ANIMATION_ID = "18447915110"
+local WALL_COMBO_CLONE_DISTANCE = 0.5      -- studs delante del usuario
+local WALL_COMBO_CLONE_LIFETIME = 10       -- segundos antes de eliminarse
+local WALL_COMBO_CLONE_MAX_RANGE = 200     -- rango máximo para buscar al jugador cercano
+
+local function getNearestOtherPlayerCharacter(myRoot)
+	local nearestCharacter = nil
+	local nearestDistance = WALL_COMBO_CLONE_MAX_RANGE
+
+	for _, otherPlayer in ipairs(Players:GetPlayers()) do
+		if otherPlayer ~= player then
+			local otherCharacter = otherPlayer.Character
+			local otherRoot = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+			local otherHumanoid = otherCharacter and otherCharacter:FindFirstChildOfClass("Humanoid")
+
+			if otherRoot and otherHumanoid and otherHumanoid.Health > 0 then
+				local distance = (otherRoot.Position - myRoot.Position).Magnitude
+				if distance < nearestDistance then
+					nearestDistance = distance
+					nearestCharacter = otherCharacter
+				end
+			end
+		end
+	end
+
+	return nearestCharacter
+end
+
+local function spawnWallComboClone(token)
+	if token ~= sequence then return end
+
+	local character = player.Character
+	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return end
+
+	local targetCharacter = getNearestOtherPlayerCharacter(myRoot)
+	if not targetCharacter then return end
+
+	-- Clonar (el personaje puede tener Archivable en false)
+	local wasArchivable = targetCharacter.Archivable
+	targetCharacter.Archivable = true
+	local clone = targetCharacter:Clone()
+	targetCharacter.Archivable = wasArchivable
+
+	if not clone then return end
+
+	clone.Name = "WallComboClone"
+
+	-- Quitar scripts del clon para que no interfieran (Animate, etc.)
+	for _, descendant in ipairs(clone:GetDescendants()) do
+		if descendant:IsA("Script") or descendant:IsA("LocalScript") then
+			descendant:Destroy()
+		end
+	end
+
+	local cloneRoot = clone:FindFirstChild("HumanoidRootPart")
+	local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
+	if not cloneRoot or not cloneHumanoid then
+		clone:Destroy()
+		return
+	end
+
+	cloneHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	cloneHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+
+	-- Sin colisiones para no empujar al usuario
+	for _, descendant in ipairs(clone:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.CanCollide = false
+		end
+	end
+
+	-- 0.5 studs enfrente del usuario, mirándolo
+	local position = myRoot.Position + myRoot.CFrame.LookVector * WALL_COMBO_CLONE_DISTANCE
+	local lookTarget = Vector3.new(myRoot.Position.X, position.Y, myRoot.Position.Z)
+	cloneRoot.CFrame = CFrame.lookAt(position, lookTarget)
+	cloneRoot.Anchored = true
+
+	clone.Parent = workspace
+
+	table.insert(currentVfx, clone)
+	Debris:AddItem(clone, WALL_COMBO_CLONE_LIFETIME)
+
+	-- Reproducir la animación en el clon
+	local animator = cloneHumanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = cloneHumanoid
+	end
+
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "rbxassetid://" .. WALL_COMBO_CLONE_ANIMATION_ID
+
+	local track = animator:LoadAnimation(animation)
+	animation:Destroy()
+	track.Priority = Enum.AnimationPriority.Action4
+	track:Play(0.15)
+
+	return clone
+end
+
+----------------------------------------------------------------
+-- VFX del Wall Combo (KJWallCombo)
+----------------------------------------------------------------
+
+local WALL_COMBO_SLAM_LIFETIME = 3          -- slam (en el HumanoidRootPart del clon)
+local WALL_COMBO_FEET_DELAY = 3             -- feet aparece a los 3 s...
+local WALL_COMBO_FEET_LIFETIME = 3          -- ...y dura 3 s
+local WALL_COMBO_HOLD_INTERVAL = 0.02       -- hold (torso del clon): cada cuánto se repite
+local WALL_COMBO_HOLD_LIFETIME = 0.1        -- y cuánto dura cada clon
+local WALL_COMBO_AURA_INTERVAL = 0.01       -- UserAura (torso del jugador): cada cuánto se repite
+local WALL_COMBO_AURA_LIFETIME = 0.1        -- y cuánto dura cada clon
+local WALL_COMBO_FINAL_DELAY = 6            -- a los 6 s se eliminan feet/hold/UserAura...
+local WALL_COMBO_FINAL_LIFETIME = 3         -- ...y aparece FinalImpact (dura 3 s, sin bucle)
+
+local function getRightLeg(character)
+	return character:FindFirstChild("Right Leg")
+		or character:FindFirstChild("RightLowerLeg")
+		or character:FindFirstChild("RightFoot")
+end
+
+local function getWallComboVfxTemplate(name)
+	local kjEffects = getKJEffects()
+	local folder = kjEffects and kjEffects:FindFirstChild("KJWallCombo")
+	return folder and folder:FindFirstChild(name)
+end
+
+-- Copia un VFX sobre una pieza. Si es un Folder, se copia cada hijo igual que los demás.
+local function placeVfxOnPart(template, targetPart, results)
+	if template:IsA("Folder") then
+		for _, child in ipairs(template:GetChildren()) do
+			placeVfxOnPart(child, targetPart, results)
+		end
+		return
+	end
+
+	local object = template:Clone()
+
+	if object:IsA("Attachment") then
+		object.Parent = targetPart
+		object.Position = Vector3.zero
+	elseif object:IsA("BasePart") then
+		object.Anchored = false
+		object.CanCollide = false
+		object.CanQuery = false
+		object.CanTouch = false
+		object.Massless = true
+		object.CFrame = targetPart.CFrame
+		object.Parent = targetPart
+
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = targetPart
+		weld.Part1 = object
+		weld.Parent = object
+	elseif object:IsA("Model") then
+		object.Parent = workspace
+		object:PivotTo(targetPart.CFrame)
+
+		local main = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+		for _, part in ipairs(object:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = false
+				part.CanCollide = false
+				part.CanQuery = false
+				part.CanTouch = false
+				part.Massless = true
+				if part ~= main then
+					local w = Instance.new("WeldConstraint")
+					w.Part0 = main
+					w.Part1 = part
+					w.Parent = main
+				end
+			end
+		end
+		if main then
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = targetPart
+			weld.Part1 = main
+			weld.Parent = main
+		end
+	else
+		object.Parent = targetPart
+	end
+
+	table.insert(results, object)
+end
+
+-- Emite una sola vez (sin bucle). Usa el atributo "EmitCount" si existe.
+local function emitBurst(instance, defaultCount)
+	local emitters = instance:GetDescendants()
+	table.insert(emitters, instance)
+
+	for _, emitter in ipairs(emitters) do
+		if emitter:IsA("ParticleEmitter") then
+			emitter.Enabled = false
+			emitter:Emit(emitter:GetAttribute("EmitCount") or defaultCount)
+		end
+	end
+end
+
+-- Coloca un VFX de KJWallCombo sobre una pieza, lo emite y lo elimina tras "lifetime" segundos
+local function spawnWallComboVfx(name, targetPart, lifetime, defaultCount, token)
+	if token ~= sequence then return {} end
+	if not targetPart or not targetPart.Parent then return {} end
+
+	local template = getWallComboVfxTemplate(name)
+	if not template then return {} end
+
+	local results = {}
+	placeVfxOnPart(template, targetPart, results)
+
+	for _, object in ipairs(results) do
+		table.insert(currentVfx, object)
+		Debris:AddItem(object, lifetime)
+		emitBurst(object, defaultCount)
+	end
+
+	return results
+end
+
+local function playWallComboVfx(clone, token)
+	local character = player.Character
+	if not character then return end
+
+	local playerTorso = getSoundParent(character)
+	local playerRoot = character:FindFirstChild("HumanoidRootPart")
+
+	local cloneRoot = clone and clone:FindFirstChild("HumanoidRootPart")
+	local cloneTorso = clone and (clone:FindFirstChild("Torso") or clone:FindFirstChild("UpperTorso") or cloneRoot)
+
+	local state = { stopped = false, objects = {} }
+
+	local function track(list)
+		for _, object in ipairs(list) do
+			table.insert(state.objects, object)
+		end
+	end
+
+	local function startLoop(name, target, interval, lifetime)
+		task.spawn(function()
+			while token == sequence and not state.stopped do
+				if target and target.Parent then
+					track(spawnWallComboVfx(name, target, lifetime, 1, token))
+				end
+				task.wait(interval)
+			end
+		end)
+	end
+
+	-- Al empezar: slam en el HumanoidRootPart del clon
+	if cloneRoot then
+		spawnWallComboVfx("slam", cloneRoot, WALL_COMBO_SLAM_LIFETIME, 3, token)
+	end
+
+	-- Bucles: hold en el torso del clon y UserAura en el torso del jugador
+	if cloneTorso then
+		startLoop("hold", cloneTorso, WALL_COMBO_HOLD_INTERVAL, WALL_COMBO_HOLD_LIFETIME)
+	end
+	startLoop("UserAura", playerTorso, WALL_COMBO_AURA_INTERVAL, WALL_COMBO_AURA_LIFETIME)
+
+	-- A los 3 s: feet en la pierna derecha del jugador (dura 3 s)
+	task.delay(WALL_COMBO_FEET_DELAY, function()
+		if token ~= sequence then return end
+
+		local leg = getRightLeg(character)
+		if leg then
+			track(spawnWallComboVfx("feet", leg, WALL_COMBO_FEET_LIFETIME, 3, token))
+		end
+	end)
+
+	-- A los 6 s: eliminar feet/hold/UserAura y poner FinalImpact en el HumanoidRootPart del jugador
+	task.delay(WALL_COMBO_FINAL_DELAY, function()
+		state.stopped = true
+
+		for _, object in ipairs(state.objects) do
+			if object and object.Parent then
+				object:Destroy()
+			end
+		end
+		table.clear(state.objects)
+
+		if token ~= sequence then return end
+
+		if playerRoot and playerRoot.Parent then
+			spawnWallComboVfx("FinalImpact", playerRoot, WALL_COMBO_FINAL_LIFETIME, 3, token)
+		end
+	end)
+end
+
+----------------------------------------------------------------
 -- Movimientos
 ----------------------------------------------------------------
 
@@ -799,6 +1603,7 @@ end)
 
 addMove("20 Series Alt", function(token)
 	local track = playAnimation("18445236460")
+	track.Priority = Enum.AnimationPriority.Action4
 	playSound("18445228136", 0, token)
 	playSound("18445228824", 0, token)
 	playSound("18445227792", 0, token)
@@ -813,6 +1618,13 @@ end)
 addMove("Swift Sweep", function(token)
 	playAnimation("16944265635")
 	playSound("16944636115", 0, token)
+
+	task.delay(0.1, function()
+		if token ~= sequence then return end
+		local state = { startTime = os.clock() }
+		task.spawn(playSweepCresc, token, state)
+		playParticleSpinner(token, state)
+	end)
 end)
 
 addMove("Swift Sweep Kick", function(token)
@@ -835,9 +1647,25 @@ addMove("Collateral Ruin", function(token)
 end)
 
 addMove("Dropkick Hit", function(token)
-	playAnimation("17420452843")
+	local track = playAnimation("17420452843")
 	playSound("17363374089", 0, token)
 	playSound("17363383992", 0, token)
+
+	-- Congelar al jugador (sin moverse ni girar) hasta que la animación termine o sea interrumpida
+	freezePlayerDuringAnimation(track, token, 15.5)
+
+	-- Solo a los 15.5 s y únicamente si la animación sigue reproduciéndose (no fue interrumpida)
+	task.delay(15.5, function()
+		if token ~= sequence then return end
+		if not track or not track.IsPlaying then return end
+
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		-- Teletransporte instantáneo 170 studs hacia donde mira el jugador
+		root.CFrame = root.CFrame + root.CFrame.LookVector * 170
+	end)
 end)
 
 addMove("Wall Combo", function(token)
@@ -846,6 +1674,9 @@ addMove("Wall Combo", function(token)
 	playSound("18443049348", 0, token)
 	playSound("18443813318", 5.9, token)
 	showWallComboDecals(token)
+	playCutscene(getCutsceneData(), token)
+	local clone = spawnWallComboClone(token)
+	playWallComboVfx(clone, token)
 end)
 
 ----------------------------------------------------------------
@@ -1070,7 +1901,7 @@ end)
 local function showNotification(text)
 	local notificationSound = Instance.new("Sound")
 	notificationSound.SoundId = "rbxassetid://73507725308522"
-	notificationSound.Volume = 0.5 
+	notificationSound.Volume = 2 
 	notificationSound.Parent = SoundService
 	notificationSound:Play()
 	Debris:AddItem(notificationSound, 5)
@@ -1086,7 +1917,6 @@ end
 
 task.spawn(function()
 	task.wait(1)
-	showNotification("Character based on KJ's Final Ride & KJ Kills Day\nCredits to Kilojoule & Stealth")
 	
 	local topbarPlus = playerGui:WaitForChild("TopbarPlus", 5)
 	if not topbarPlus then return end
@@ -1109,7 +1939,6 @@ task.spawn(function()
 			if hasCustomSpawnPlayed then
 				showNotification("You're already using this character.")
 			else
-				showNotification("Character based on KJ's Final Ride & KJ Kills Day\nCredits to Kilojoule & Stealth")
 				pcall(function()
 					local bald = dropdownFrame:FindFirstChild("Bald")
 					if not bald then return end
@@ -1159,7 +1988,7 @@ local function playCustomSpawn(character, humanoid, animator)
 	-- (sin Debris: solo se destruye al terminar de sonar o si la anim se interrumpe)
 	local sound = Instance.new("Sound")
 	sound.SoundId = "rbxassetid://17325174223"
-	sound.Volume = 1
+	sound.Volume = 2
 	sound.Parent = getSoundParent(character)
 	sound.Ended:Connect(function() sound:Destroy() end)
 	sound:Play()
@@ -1168,7 +1997,7 @@ local function playCustomSpawn(character, humanoid, animator)
 	-- Sonido Extra NUEVO
 	local extraSound = Instance.new("Sound")
 	extraSound.SoundId = "rbxassetid://17325206534"
-	extraSound.Volume = 1
+	extraSound.Volume = 2
 	extraSound.Parent = getSoundParent(character)
 	extraSound.Ended:Connect(function() extraSound:Destroy() end)
 	extraSound:Play()
@@ -1281,18 +2110,50 @@ local function playCustomSpawn(character, humanoid, animator)
 			
 			-- Si tiene submodelos internos, los separamos al caer, sino aplicamos a todas las piezas
 			if #subModelos >= 2 then
-				local direccion = 1
-				for _, subModel in ipairs(subModelos) do
-					for _, part in ipairs(subModel:GetDescendants()) do
-						if part:IsA("BasePart") then
-							part.Anchored = false
-							part.CanCollide = true
-							-- Romper uniones internas para que se separen
-							for _, joint in ipairs(part:GetJoints()) do
-								joint:Destroy()
-							end
-							part.AssemblyLinearVelocity = Vector3.new(15 * direccion, 10, 0)
+				-- Agrupar las piezas de cada submodelo
+				local grupos = {}
+				local grupoDePieza = {}
+				for indice, subModel in ipairs(subModelos) do
+					local piezas = {}
+					if subModel:IsA("BasePart") then
+						table.insert(piezas, subModel)
+					end
+					for _, descendant in ipairs(subModel:GetDescendants()) do
+						if descendant:IsA("BasePart") then
+							table.insert(piezas, descendant)
 						end
+					end
+					grupos[indice] = piezas
+					for _, pieza in ipairs(piezas) do
+						grupoDePieza[pieza] = indice
+					end
+				end
+
+				-- Romper SOLO las uniones entre submodelos distintos (las de dentro de cada uno se conservan)
+				for _, descendant in ipairs(clonedPhone:GetDescendants()) do
+					if descendant:IsA("WeldConstraint") or descendant:IsA("JointInstance") then
+						if grupoDePieza[descendant.Part0] ~= grupoDePieza[descendant.Part1] then
+							descendant:Destroy()
+						end
+					end
+				end
+
+				-- Mantener unidas las piezas de cada submodelo y soltarlos en direcciones opuestas
+				local direccion = 1
+				for _, piezas in ipairs(grupos) do
+					local principal = piezas[1]
+					if principal then
+						for _, pieza in ipairs(piezas) do
+							pieza.Anchored = false
+							pieza.CanCollide = true
+							if pieza ~= principal then
+								local weld = Instance.new("WeldConstraint")
+								weld.Part0 = principal
+								weld.Part1 = pieza
+								weld.Parent = principal
+							end
+						end
+						principal.AssemblyLinearVelocity = Vector3.new(15 * direccion, 10, 0)
 					end
 					direccion = -1 -- Invertir dirección para el segundo modelo
 				end
@@ -1376,6 +2237,9 @@ local function listenForSpawnAnim(character)
 
 	local function triggerOurAnimation(trackToCancel)
 		hasCustomSpawnPlayed = true 
+		
+		-- Créditos: solo cuando la animación de spawn se activa
+		showNotification("Character based on KJ's Final Ride & KJ Kills Day\nCredits to Kilojoule & Stealth")
 		
 		if playedConnection then
 			playedConnection:Disconnect()
