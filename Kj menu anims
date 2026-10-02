@@ -1347,6 +1347,7 @@ end
 local WALL_COMBO_SLAM_LIFETIME = 3          -- slam (en el HumanoidRootPart del clon)
 local WALL_COMBO_FEET_DELAY = 3             -- feet aparece a los 3 s...
 local WALL_COMBO_FEET_LIFETIME = 3          -- ...y dura 3 s
+local WALL_COMBO_LOOPS_DELAY = 3         -- hold y UserAura empiezan a los 3 s de la animación
 local WALL_COMBO_HOLD_INTERVAL = 0.02       -- hold (torso del clon): cada cuánto se repite
 local WALL_COMBO_HOLD_LIFETIME = 0.1        -- y cuánto dura cada clon
 local WALL_COMBO_AURA_INTERVAL = 0.01       -- UserAura (torso del jugador): cada cuánto se repite
@@ -1493,11 +1494,15 @@ local function playWallComboVfx(clone, token)
 		spawnWallComboVfx("slam", cloneRoot, WALL_COMBO_SLAM_LIFETIME, 3, token)
 	end
 
-	-- Bucles: hold en el torso del clon y UserAura en el torso del jugador
-	if cloneTorso then
-		startLoop("hold", cloneTorso, WALL_COMBO_HOLD_INTERVAL, WALL_COMBO_HOLD_LIFETIME)
-	end
-	startLoop("UserAura", playerTorso, WALL_COMBO_AURA_INTERVAL, WALL_COMBO_AURA_LIFETIME)
+	-- Bucles (solo después de 3 s): hold en el torso del clon y UserAura en el torso del jugador
+	task.delay(WALL_COMBO_LOOPS_DELAY, function()
+		if token ~= sequence or state.stopped then return end
+
+		if cloneTorso then
+			startLoop("hold", cloneTorso, WALL_COMBO_HOLD_INTERVAL, WALL_COMBO_HOLD_LIFETIME)
+		end
+		startLoop("UserAura", playerTorso, WALL_COMBO_AURA_INTERVAL, WALL_COMBO_AURA_LIFETIME)
+	end)
 
 	-- A los 3 s: feet en la pierna derecha del jugador (dura 3 s)
 	task.delay(WALL_COMBO_FEET_DELAY, function()
