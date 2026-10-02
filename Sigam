@@ -1,93 +1,65 @@
-local RunService = game:GetService("RunService")
-local workspace = game:GetService("Workspace")
+game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = 0
+local player = game.Players.LocalPlayer
+repeat wait() until player.Character.Humanoid
+local humanoid = player.Character.Humanoid
+local character = player.Character or player.CharacterAdded:Wait()
+local UserInputService = game:GetService("UserInputService")
 
-local camera = workspace.CurrentCamera
+local soundeffect = Instance.new("Sound")
+soundeffect.SoundId = "rbxassetid://0"
+soundeffect.Parent = game.Players.LocalPlayer.Character.Torso
+soundeffect:Play()
+soundeffect.Volume = 5
 
--- Your complete exported camera data
-local cameraData = {
-	[1] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.85429382, 0.501766682, -0.816898346, 0.707725823, 0.125324994, 0.695282578, 0.000290125608, 0.984088659, -0.177677751, -0.706487179, 0.125948846, 0.696428597) },
-	[2] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.84249878, 0.475216389, -0.820705414, 0.710066497, 0.130764917, 0.691885829, 0.000551328063, 0.98250103, -0.186256349, -0.704134345, 0.132635862, 0.697569013) },
-	[3] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.83070183, 0.448665857, -0.824512482, 0.712400973, 0.136173457, 0.688434243, 0.000783585012, 0.980838239, -0.194822341, -0.701772213, 0.139331073, 0.698643446) },
-	[4] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.81890678, 0.422115564, -0.82831955, 0.714729011, 0.141549885, 0.684927881, 0.000986866653, 0.979100525, -0.20337458, -0.699400842, 0.14603366, 0.699651837) },
-	[5] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.80711174, 0.395565271, -0.832126617, 0.717050254, 0.146893471, 0.681367218, 0.00116113573, 0.977288067, -0.211911932, -0.69702059, 0.152742669, 0.700594068) },
-	[6] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.79531479, 0.36901474, -0.835933685, 0.719364524, 0.152203515, 0.677752733, 0.0013063699, 0.975401223, -0.220433265, -0.694631577, 0.159457266, 0.701470196) },
-	[7] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.78351974, 0.342464447, -0.839740753, 0.721671402, 0.157479361, 0.674085021, 0.00142255425, 0.973440051, -0.228937522, -0.692234278, 0.166176602, 0.702279925) },
-	[8] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.7717247, 0.315914154, -0.843547821, 0.723970711, 0.162720293, 0.670364499, 0.00150969625, 0.971405029, -0.237423524, -0.689829111, 0.172899738, 0.703023136) },
-	[9] = { ["fov"] = 45, ["cframe"] = CFrame.new(2.86555481, 0.23277092, -0.736236572, 0.723455608, 0.174449652, 0.667966545, 0, 0.967547417, -0.252689719, -0.690370977, 0.1828098, 0.699977517) },
-	[10] = { ["fov"] = 25, ["cframe"] = CFrame.new(2.64287758, 0.179947138, -0.50557518, 0.828445137, 0.150005773, 0.539608181, 0, 0.963465214, -0.267833799, -0.560070336, 0.221885607, 0.798178017) },
-	[11] = { ["fov"] = 30, ["cframe"] = CFrame.new(2.69004822, 0.239521027, -0.730703354, 0.771965027, 0.160604969, 0.615041494, -7.4505806e-09, 0.967556, -0.252656609, -0.635664999, 0.195042059, 0.746919394) },
-	[12] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.58899307, 0.232650042, -0.775903702, 0.810771048, 0.153424725, 0.564899385, 0, 0.965040445, -0.26210162, -0.585363507, 0.212504402, 0.782426715) },
-	[13] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.95498848, 0.204814196, -1.11035538, 0.666534901, 0.202411577, 0.717468441, 0, 0.962432742, -0.271520674, -0.745473921, 0.180978, 0.64149493) },
-	[14] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.92228889, 0.167276382, -1.05633545, 0.693083346, 0.202378601, 0.691865861, 0.000176884234, 0.959734023, -0.280910283, -0.720857441, 0.194816634, 0.665139914) },
-	[15] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.88958931, 0.129738569, -1.00231361, 0.718723595, 0.201825678, 0.665359199, 0, 0.956943929, -0.290273041, -0.69529599, 0.208626077, 0.687778115) },
-	[16] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.85727501, 0.118070602, -0.989864349, 0.719717681, 0.202801183, 0.663986564, 1.37090683e-06, 0.956384778, -0.292109787, -0.694266915, 0.210237503, 0.688326776) },
-	[17] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.82496071, 0.106402397, -0.977413177, 0.720710397, 0.203773618, 0.66261071, 0, 0.955822289, -0.293945402, -0.693236291, 0.211849511, 0.688871026) },
-	[18] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.79913902, 0.0894470215, -0.96686554, 0.724851012, 0.206907332, 0.657099962, 0.000143736601, 0.953786075, -0.300486326, -0.688905597, 0.217902303, 0.691323161) },
-	[19] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.77331543, 0.0724916458, -0.956319809, 0.728966594, 0.209995314, 0.651544154, 0.0002463907, 0.951704979, -0.307014078, -0.684549272, 0.223963544, 0.693709373) },
-	[20] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.74749374, 0.0555365086, -0.945774078, 0.733056247, 0.213037208, 0.645944059, 0.000308007002, 0.949578941, -0.313527852, -0.680167973, 0.230032533, 0.696029186) },
-	[21] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.72167206, 0.0385811329, -0.93522644, 0.737119794, 0.216032594, 0.640300274, 0.000328511, 0.947408378, -0.320026875, -0.675762057, 0.236108497, 0.69828248) },
-	[22] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.71984673, 0.0279860497, -0.929424286, 0.737533748, 0.217120111, 0.63945508, 0.000312842429, 0.946795642, -0.32183513, -0.675310135, 0.23756434, 0.698225856) },
-	[23] = { ["fov"] = 35, ["cframe"] = CFrame.new(2.71802139, 0.0173909664, -0.923622131, 0.7379, 0.2182, 0.6385, 0.0003, 0.9461, -0.3236, -0.6748, 0.2390, 0.6981) }
-}
+local soundeffect = Instance.new("Sound")
+soundeffect.SoundId = "rbxassetid://0"
+soundeffect.Parent = game.Players.LocalPlayer.Character.Torso
+soundeffect:Play()
+soundeffect.Volume = 5
 
---[[
-	Plays a camera track smoothly regardless of frame rate.
-	Returns a function that can be called to cancel the track early.
-]]
-local function playCameraTrack(trackData, fps, originCFrame)
-	fps = fps or 60
-	local totalFrames = #trackData
-	local duration = totalFrames / fps
-	
-	local startTime = os.clock()
-	local renderConnection
-	
-	camera.CameraType = Enum.CameraType.Scriptable
-	
-	-- Bind to RenderStepped to update the camera right before a frame renders
-	renderConnection = RunService.RenderStepped:Connect(function()
-		local elapsed = os.clock() - startTime
-		
-		-- Clean up when the track finishes
-		if elapsed >= duration then
-			renderConnection:Disconnect()
-			camera.CameraType = Enum.CameraType.Custom
-			return
-		end
-		
-		-- Calculate exactly which two frames we are currently between
-		local exactFrame = (elapsed * fps) + 1
-		local currentFrameIndex = math.floor(exactFrame)
-		local nextFrameIndex = math.min(currentFrameIndex + 1, totalFrames)
-		
-		local frame1 = trackData[currentFrameIndex]
-		local frame2 = trackData[nextFrameIndex]
-		
-		-- 'alpha' represents the percentage of progression between frame1 and frame2 (0 to 1)
-		local alpha = exactFrame - currentFrameIndex
-		
-		-- Smoothly interpolate the CFrame and FOV
-		local currentCFrame = frame1.cframe:Lerp(frame2.cframe, alpha)
-		local currentFOV = frame1.fov + ((frame2.fov - frame1.fov) * alpha)
-		
-		-- Apply an offset if an origin is provided
-		if originCFrame then
-			currentCFrame = originCFrame * currentCFrame
-		end
-		
-		-- Apply to the camera
-		camera.CFrame = currentCFrame
-		camera.FieldOfView = currentFOV
-	end)
-	
-	-- Return a cleanup function so the track can be canceled via code
-	return function()
-		if renderConnection.Connected then
-			renderConnection:Disconnect()
-			camera.CameraType = Enum.CameraType.Custom
-		end
-	end
+local anim = Instance.new("Animation")
+anim.AnimationId = "rbxassetid://18447913645"
+
+local playAnim = humanoid:LoadAnimation(anim)
+anim.AnimationId = "rbxassetid://0"
+playAnim:Play()
+
+local CutsceneName = "KJ"
+local Speed = 60
+
+-- don't change anything here unless you know
+local function s(d)
+    if not d then return end
+
+    local o = workspace.CurrentCamera.CFrame
+    local e = 0
+    local con
+
+    game.Players.LocalPlayer.Character.Humanoid.AutoRotate = false
+    workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
+
+    con = game:GetService("RunService").RenderStepped:Connect(function(dt)
+        e = e + dt * Speed
+        local k = d[math.ceil(e)]
+
+        if k then
+            game:GetService("TweenService"):Create(workspace.CurrentCamera, TweenInfo.new(0.0005, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+                CFrame = game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame * k.cframe,
+                FieldOfView = k.fov
+            }):Play()
+        else
+            con:Disconnect()
+            workspace.CurrentCamera.FieldOfView = 70
+            game.Players.LocalPlayer.Character.Humanoid.AutoRotate = true
+            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            workspace.CurrentCamera.CFrame = o
+        end
+    end)
 end
 
--- Play the track at 60 FPS
-playCameraTrack(cameraData, 60)
+local m = require(game.ReplicatedStorage.Cutscenes["KJ"])
+
+local d = m
+if d then
+    s(d)
+end
