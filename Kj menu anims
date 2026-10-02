@@ -1266,78 +1266,125 @@ local function getNearestOtherPlayerCharacter(myRoot)
 	return nearestCharacter
 end
 
+-- Devuelve un "handle": handle.instance siempre apunta al clon actual (por si hay que recrearlo)
 local function spawnWallComboClone(token)
-	if token ~= sequence then return end
+	if token ~= sequence then return nil end
 
 	local character = player.Character
 	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
-	if not myRoot then return end
+	if not myRoot then return nil end
 
 	local targetCharacter = getNearestOtherPlayerCharacter(myRoot)
-	if not targetCharacter then return end
+	if not targetCharacter then return nil end
 
-	-- Clonar (el personaje puede tener Archivable en false)
+	-- Plantilla (nunca se pone en el workspace): sirve para recrear el clon si algo lo elimina antes de tiempo
 	local wasArchivable = targetCharacter.Archivable
 	targetCharacter.Archivable = true
-	local clone = targetCharacter:Clone()
+	local template = targetCharacter:Clone()
 	targetCharacter.Archivable = wasArchivable
 
-	if not clone then return end
+	if not template then return nil end
 
-	clone.Name = "WallComboClone"
+	template.Name = "WallComboClone"
 
-	-- Quitar scripts del clon para que no interfieran (Animate, etc.)
-	for _, descendant in ipairs(clone:GetDescendants()) do
+	-- Quitar scripts para que no interfieran (Animate, etc.)
+	for _, descendant in ipairs(template:GetDescendants()) do
 		if descendant:IsA("Script") or descendant:IsA("LocalScript") then
 			descendant:Destroy()
 		end
 	end
 
-	local cloneRoot = clone:FindFirstChild("HumanoidRootPart")
-	local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
-	if not cloneRoot or not cloneHumanoid then
-		clone:Destroy()
-		return
+	local templateRoot = template:FindFirstChild("HumanoidRootPart")
+	local templateHumanoid = template:FindFirstChildOfClass("Humanoid")
+	if not templateRoot or not templateHumanoid then
+		template:Destroy()
+		return nil
 	end
 
-	cloneHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-	cloneHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+	templateHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	templateHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+	templateHumanoid.BreakJointsOnDeath = false
 
 	-- Sin colisiones para no empujar al usuario
-	for _, descendant in ipairs(clone:GetDescendants()) do
+	for _, descendant in ipairs(template:GetDescendants()) do
 		if descendant:IsA("BasePart") then
 			descendant.CanCollide = false
 		end
 	end
 
-	-- 0.5 studs enfrente del usuario, mirándolo
+	-- 0.5 studs enfrente del usuario, mirándolo (posición fija)
 	local position = myRoot.Position + myRoot.CFrame.LookVector * WALL_COMBO_CLONE_DISTANCE
 	local lookTarget = Vector3.new(myRoot.Position.X, position.Y, myRoot.Position.Z)
-	cloneRoot.CFrame = CFrame.lookAt(position, lookTarget)
-	cloneRoot.Anchored = true
+	local cloneCFrame = CFrame.lookAt(position, lookTarget)
 
-	clone.Parent = workspace
+	local handle = { instance = nil }
+	local startTime = os.clock()
+	local expired = false
+	local respawns = 0
+	local place
 
-	-- El clon NO se mete en currentVfx: así no se elimina junto con los VFX al limpiar o interrumpir.
-	-- Solo desaparece por su propio tiempo de vida.
-	Debris:AddItem(clone, WALL_COMBO_CLONE_LIFETIME)
+	place = function()
+		if expired then return end
 
-	-- Reproducir la animación en el clon
-	local animator = cloneHumanoid:FindFirstChildOfClass("Animator")
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = cloneHumanoid
+		local clone = template:Clone()
+		local cloneRoot = clone:FindFirstChild("HumanoidRootPart")
+		local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
+		if not cloneRoot or not cloneHumanoid then
+			clone:Destroy()
+			return
+		end
+
+		cloneRoot.CFrame = cloneCFrame
+		cloneRoot.Anchored = true
+		clone.Parent = workspace
+		handle.instance = clone
+
+		-- Evitar que el clon "muera" y se rompa/desaparezca
+		cloneHumanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+		cloneHumanoid.Health = cloneHumanoid.MaxHealth
+
+		-- Reproducir la animación (si se recrea, continúa desde donde iba)
+		local animator = cloneHumanoid:FindFirstChildOfClass("Animator")
+		if not animator then
+			animator = Instance.new("Animator")
+			animator.Parent = cloneHumanoid
+		end
+
+		local animation = Instance.new("Animation")
+		animation.AnimationId = "rbxassetid://" .. WALL_COMBO_CLONE_ANIMATION_ID
+
+		local track = animator:LoadAnimation(animation)
+		animation:Destroy()
+		track.Priority = Enum.AnimationPriority.Action4
+		track:Play(0.15)
+
+		local elapsed = os.clock() - startTime
+		if elapsed > 0.1 then
+			track.TimePosition = elapsed
+		end
+
+		-- Si algo lo elimina antes de los 10 s, se recrea
+		clone.Destroying:Connect(function()
+			if expired or respawns >= 10 then return end
+			respawns += 1
+			task.defer(place)
+		end)
 	end
 
-	local animation = Instance.new("Animation")
-	animation.AnimationId = "rbxassetid://" .. WALL_COMBO_CLONE_ANIMATION_ID
+	place()
 
-	local track = animator:LoadAnimation(animation)
-	animation:Destroy()
-	track.Priority = Enum.AnimationPriority.Action4
-	track:Play(0.15)
+	-- Tiempo de vida propio (sin Debris, que puede eliminar objetos antes si se llena)
+	task.delay(WALL_COMBO_CLONE_LIFETIME, function()
+		expired = true
 
-	return clone
+		if handle.instance then
+			handle.instance:Destroy()
+			handle.instance = nil
+		end
+		template:Destroy()
+	end)
+
+	return handle
 end
 
 ----------------------------------------------------------------
@@ -1460,15 +1507,30 @@ local function spawnWallComboVfx(name, targetPart, lifetime, defaultCount, token
 	return results
 end
 
-local function playWallComboVfx(clone, token)
+local function playWallComboVfx(cloneHandle, token)
 	local character = player.Character
 	if not character then return end
 
 	local playerTorso = getSoundParent(character)
 	local playerRoot = character:FindFirstChild("HumanoidRootPart")
 
-	local cloneRoot = clone and clone:FindFirstChild("HumanoidRootPart")
-	local cloneTorso = clone and (clone:FindFirstChild("Torso") or clone:FindFirstChild("UpperTorso") or cloneRoot)
+	-- Siempre se busca en el clon ACTUAL (por si se recreó)
+	local function getCloneRoot()
+		local clone = cloneHandle and cloneHandle.instance
+		return clone and clone.Parent and clone:FindFirstChild("HumanoidRootPart") or nil
+	end
+
+	local function getCloneTorso()
+		local clone = cloneHandle and cloneHandle.instance
+		if not clone or not clone.Parent then return nil end
+		return clone:FindFirstChild("Torso")
+			or clone:FindFirstChild("UpperTorso")
+			or clone:FindFirstChild("HumanoidRootPart")
+	end
+
+	local function getPlayerTorso()
+		return playerTorso
+	end
 
 	local state = { stopped = false, objects = {} }
 
@@ -1478,9 +1540,10 @@ local function playWallComboVfx(clone, token)
 		end
 	end
 
-	local function startLoop(name, target, interval, lifetime)
+	local function startLoop(name, getTarget, interval, lifetime)
 		task.spawn(function()
 			while token == sequence and not state.stopped do
+				local target = getTarget()
 				if target and target.Parent then
 					track(spawnWallComboVfx(name, target, lifetime, 1, token))
 				end
@@ -1490,6 +1553,7 @@ local function playWallComboVfx(clone, token)
 	end
 
 	-- Al empezar: slam en el HumanoidRootPart del clon
+	local cloneRoot = getCloneRoot()
 	if cloneRoot then
 		spawnWallComboVfx("slam", cloneRoot, WALL_COMBO_SLAM_LIFETIME, 3, token)
 	end
@@ -1498,10 +1562,10 @@ local function playWallComboVfx(clone, token)
 	task.delay(WALL_COMBO_LOOPS_DELAY, function()
 		if token ~= sequence or state.stopped then return end
 
-		if cloneTorso then
-			startLoop("hold", cloneTorso, WALL_COMBO_HOLD_INTERVAL, WALL_COMBO_HOLD_LIFETIME)
+		if cloneHandle then
+			startLoop("hold", getCloneTorso, WALL_COMBO_HOLD_INTERVAL, WALL_COMBO_HOLD_LIFETIME)
 		end
-		startLoop("UserAura", playerTorso, WALL_COMBO_AURA_INTERVAL, WALL_COMBO_AURA_LIFETIME)
+		startLoop("UserAura", getPlayerTorso, WALL_COMBO_AURA_INTERVAL, WALL_COMBO_AURA_LIFETIME)
 	end)
 
 	-- A los 3 s: feet en la pierna derecha del jugador (dura 3 s)
