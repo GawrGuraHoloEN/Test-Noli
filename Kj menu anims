@@ -583,6 +583,41 @@ local function freezePlayerDuringAnimation(track, token, unanchorAfter)
 	}
 end
 
+-- Impide que el jugador se mueva mientras la animación esté sonando (no toca la rotación ni la cámara)
+local function freezeMovementDuringAnimation(track, token)
+	stopForcedMovement()
+
+	local character, humanoid = getCharacter()
+
+	savedWalkSpeed = humanoid.WalkSpeed
+
+	local controls = getPlayerControls()
+	if controls then
+		controls:Disable()
+	end
+
+	humanoid.WalkSpeed = 0
+
+	forcedMovementToken += 1
+	local movementToken = forcedMovementToken
+
+	forcedMovementConnection = RunService.RenderStepped:Connect(function()
+		if token ~= sequence
+			or movementToken ~= forcedMovementToken
+			or not character.Parent
+			or not humanoid.Parent
+			or not track.IsPlaying then
+
+			-- Terminó o se interrumpió la animación: se devuelve el movimiento
+			stopForcedMovement()
+			return
+		end
+
+		humanoid.WalkSpeed = 0
+		humanoid:Move(Vector3.zero, false)
+	end)
+end
+
 ----------------------------------------------------------------
 -- Limpieza
 ----------------------------------------------------------------
@@ -1241,7 +1276,7 @@ end
 local WALL_COMBO_CLONE_ANIMATION_ID = "18447915110"
 local WALL_COMBO_CLONE_DISTANCE = 0.5      -- studs delante del usuario
 local WALL_COMBO_CLONE_LIFETIME = 10       -- segundos antes de eliminarse
-local WALL_COMBO_CLONE_MAX_RANGE = 200     -- rango máximo para buscar al jugador cercano
+local WALL_COMBO_CLONE_MAX_RANGE = 2000    -- rango máximo para buscar al jugador cercano
 
 local function getNearestOtherPlayerCharacter(myRoot)
 	local nearestCharacter = nil
@@ -1739,7 +1774,8 @@ addMove("Dropkick Hit", function(token)
 end)
 
 addMove("Wall Combo", function(token)
-	playAnimation(WALL_COMBO_ANIMATION_ID)
+	local wallComboTrack = playAnimation(WALL_COMBO_ANIMATION_ID)
+	freezeMovementDuringAnimation(wallComboTrack, token)
 	playSound("18443048724", 0, token)
 	playSound("18443049348", 0, token)
 	playSound("18443813318", 5.9, token)
