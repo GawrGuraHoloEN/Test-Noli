@@ -1318,7 +1318,8 @@ local function spawnWallComboClone(token)
 
 	clone.Parent = workspace
 
-	table.insert(currentVfx, clone)
+	-- El clon NO se mete en currentVfx: así no se elimina junto con los VFX al limpiar o interrumpir.
+	-- Solo desaparece por su propio tiempo de vida.
 	Debris:AddItem(clone, WALL_COMBO_CLONE_LIFETIME)
 
 	-- Reproducir la animación en el clon
