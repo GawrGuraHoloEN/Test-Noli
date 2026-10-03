@@ -1192,10 +1192,25 @@ local function buildWallComboFrames()
 	return frames
 end
 
+-- Copia local de los frames (se guarda aquí para que sigan existiendo aunque el original desaparezca al reiniciar)
+local wallComboFramesData = nil
+
 local function preloadWallComboFrames()
-	if preloadedWallComboGui then return end
-	local frames = buildWallComboFrames()
-	if not frames or #frames == 0 then return end
+	-- Copiar los datos de los frames una sola vez
+	if not wallComboFramesData then
+		local frames = buildWallComboFrames()
+		if frames and #frames > 0 then
+			wallComboFramesData = frames
+		end
+	end
+
+	if not wallComboFramesData then return end
+
+	-- Si la GUI ya existe, no hacer nada
+	if preloadedWallComboGui and preloadedWallComboGui.Parent then return end
+
+	-- (Re)crear la GUI a partir de la copia local
+	table.clear(preloadedWallComboImages)
 
 	local wallGui = Instance.new("ScreenGui")
 	wallGui.Name = "WallComboSequence"
@@ -1220,7 +1235,7 @@ local function preloadWallComboFrames()
 	preloadedWallComboGui = wallGui
 	preloadedWallComboBackground = background
 
-	for index, frameData in ipairs(frames) do
+	for index, frameData in ipairs(wallComboFramesData) do
 		local image = Instance.new("ImageLabel")
 		image.Name = "WallFrame_" .. tostring(index)
 		image.Size = UDim2.fromScale(1, 1)
@@ -1245,7 +1260,7 @@ end
 local function showWallComboDecals(token)
 	task.delay(WALL_DECAL_DELAY, function()
 		if token ~= sequence then return end
-		if not preloadedWallComboGui then preloadWallComboFrames() end
+		if not preloadedWallComboGui or not preloadedWallComboGui.Parent then preloadWallComboFrames() end
 		if not preloadedWallComboGui or #preloadedWallComboImages == 0 then return end
 
 		preloadedWallComboGui.Enabled = true
@@ -2152,7 +2167,7 @@ local function playCustomSpawn(character, humanoid, animator)
 	-- ==========================================
 	-- ACCIÓN 1: Quitar herramientas y cambiar UI 
 	-- ==========================================
-	task.delay(0.01, function()
+	task.delay(0.03, function()
 		if not isSpawnActive then return end
 		
 		local backpack = player:FindFirstChild("Backpack")
@@ -2429,3 +2444,31 @@ if player.Character then
 	hasCustomSpawnPlayed = false
 	task.spawn(listenForSpawnAnim, player.Character)
 end
+
+----------------------------------------------------------------
+-- Copiar los frames del Wall Combo apenas se ejecuta el script
+----------------------------------------------------------------
+
+task.spawn(function()
+	-- Reintenta hasta que los recursos existan (pueden tardar en replicarse)
+	local attempts = 0
+	while not wallComboFramesData and attempts < 120 do
+		preloadWallComboFrames()
+		if wallComboFramesData then break end
+		attempts += 1
+		task.wait(0.5)
+	end
+end)
+
+-- Si la GUI se elimina (por un reinicio u otro script), se vuelve a crear desde la copia local
+playerGui.ChildRemoved:Connect(function(child)
+	if child == preloadedWallComboGui then
+		preloadedWallComboGui = nil
+		preloadedWallComboBackground = nil
+		task.defer(preloadWallComboFrames)
+	end
+end)
+
+player.CharacterAdded:Connect(function()
+	task.defer(preloadWallComboFrames)
+end)
