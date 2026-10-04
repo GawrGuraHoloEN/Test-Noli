@@ -1684,10 +1684,11 @@ local CLONE_GETUP_WAIT = 2             -- segundos que espera de pie antes de el
 local IMPACT_KEEP_TIME = 4             -- segundos extra que se mantienen el cráter y las partes
 local IMPACT_SOUND_ID = "4307204452"
 local CRATER_PART_COUNT = 8
-local CRATER_PART_SIZE = 4             -- 4x4x4 studs
+local CRATER_PART_SIZE = 3.5             -- 3.5x3.5x3.5 studs
 local CRATER_CLONE_DISTANCE = 2        -- distancia mínima entre el clon y cada parte
 local CRATER_PART_GAP = 1              -- separación entre partes vecinas
-local CRATER_BURIAL = 2.2              -- studs enterrados en la superficie
+local CRATER_BURIAL_MIN = 1.0          -- mínimo de studs enterrados (cada parte elige uno distinto)
+local CRATER_BURIAL_MAX = 2.0          -- máximo de studs enterrados
 local CRATER_TILT = -15                -- grados de inclinación mirando al clon
 local SMALL_PART_INTERVAL = 0.3        -- cada cuánto se crea una parte pequeña
 local R15_IDLE_ANIMATION = "507766666"
@@ -1817,11 +1818,14 @@ local function createCrater(folder, center, normal, color, material)
 		CRATER_CLONE_DISTANCE + CRATER_PART_SIZE / 2,
 		(CRATER_PART_SIZE + CRATER_PART_GAP) / (2 * math.sin(math.pi / CRATER_PART_COUNT))
 	)
-	local lift = normal * (CRATER_PART_SIZE / 2 - CRATER_BURIAL)
 
 	for index = 1, CRATER_PART_COUNT do
 		local angle = (index - 1) * (2 * math.pi / CRATER_PART_COUNT)
 		local offset = base.RightVector * math.cos(angle) * radius + base.UpVector * math.sin(angle) * radius
+
+		-- Cada parte está enterrada una cantidad distinta (sin pasarse)
+		local burial = impactRandom:NextNumber(CRATER_BURIAL_MIN, CRATER_BURIAL_MAX)
+		local lift = normal * (CRATER_PART_SIZE / 2 - burial)
 
 		local position = center + offset + lift
 		local lookTarget = center + lift
