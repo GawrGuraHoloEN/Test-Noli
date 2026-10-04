@@ -1673,8 +1673,8 @@ end
 -- Impacto del clon: vuelo ragdoll, cráter y partes (Wall Combo)
 ----------------------------------------------------------------
 
-local CLONE_FLY_SPEED = 130            -- velocidad hacia la izquierda del jugador
-local CLONE_LAUNCH_DELAY = 0.3          -- espera antes de mandar volando al clon
+local CLONE_FLY_SPEED = 150            -- velocidad hacia la izquierda del jugador
+local CLONE_LAUNCH_DELAY = 0.1          -- espera antes de mandar volando al clon
 local CLONE_FLY_UP = 45                -- impulso hacia arriba
 local CLONE_TOUCH_GRACE = 0.12         -- tiempo en el que se ignoran toques (el clon empieza pegado al suelo)
 local CLONE_MAX_TIME = 12              -- tiempo máximo de toda la secuencia ragdoll
@@ -1765,11 +1765,19 @@ local function ragdollClone(clone, humanoid)
 				local socket = Instance.new("BallSocketConstraint")
 				socket.Attachment0 = attachment0
 				socket.Attachment1 = attachment1
+				-- Límites amplios para que brazos y piernas se muevan sueltos (cuello y cintura un poco más limitados)
+				local upperAngle = 110
+				local twistAngle = 80
+				if descendant.Name == "Neck" or descendant.Name == "Waist" then
+					upperAngle = 60
+					twistAngle = 40
+				end
+
 				socket.LimitsEnabled = true
-				socket.UpperAngle = 50
+				socket.UpperAngle = upperAngle
 				socket.TwistLimitsEnabled = true
-				socket.TwistLowerAngle = -30
-				socket.TwistUpperAngle = 30
+				socket.TwistLowerAngle = -twistAngle
+				socket.TwistUpperAngle = twistAngle
 				socket.Parent = descendant.Part0
 
 				-- Las partes unidas no chocan entre sí
@@ -1981,12 +1989,25 @@ local function launchWallComboClone(cloneHandle, token, playerRoot)
 	cloneRoot.Anchored = false
 
 	local velocity = leftDirection * CLONE_FLY_SPEED + Vector3.new(0, CLONE_FLY_UP, 0)
+	local mainAssembly = cloneRoot:GetRootPart()
 	for _, part in ipairs(cloneParts) do
-		part.AssemblyLinearVelocity = velocity
+		local isLimb = part:GetRootPart() ~= mainAssembly
+
+		-- Brazos, piernas y cabeza reciben velocidades distintas para que se muevan sueltos y no rígidos
+		local variation = isLimb
+			and Vector3.new(
+				impactRandom:NextNumber(-14, 14),
+				impactRandom:NextNumber(-8, 14),
+				impactRandom:NextNumber(-14, 14)
+			)
+			or Vector3.zero
+		local spin = isLimb and 25 or 8
+
+		part.AssemblyLinearVelocity = velocity + variation
 		part.AssemblyAngularVelocity = Vector3.new(
-			impactRandom:NextNumber(-8, 8),
-			impactRandom:NextNumber(-8, 8),
-			impactRandom:NextNumber(-8, 8)
+			impactRandom:NextNumber(-spin, spin),
+			impactRandom:NextNumber(-spin, spin),
+			impactRandom:NextNumber(-spin, spin)
 		)
 	end
 
