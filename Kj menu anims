@@ -52,8 +52,8 @@ local DROPKICK_CAMERA_START = 1          -- segundo en el que empieza (1 s antes
 local FINAL_VFX_NAME = "fine...Emit2"
 
 local WALL_DECAL_DELAY = 2.9
-local WALL_DECAL_DISPLAY_TIME = 0.03
-local WALL_DECAL_COOLDOWN = 0.02
+local WALL_DECAL_FRAME_TIME = 0.04     -- cada cuánto empieza un frame nuevo (velocidad de la animación)
+local WALL_DECAL_OVERLAP_TIME = 0.02   -- tiempo extra que cada frame sigue visible debajo del siguiente (sin huecos)
 
 -- Wall Combo preload
 local preloadedWallComboGui = nil
@@ -1247,7 +1247,7 @@ local function preloadWallComboFrames()
 		image.ImageTransparency = 1
 		image.ScaleType = Enum.ScaleType.Stretch
 		image.Visible = false
-		image.ZIndex = 2
+		image.ZIndex = 1 + index -- el frame más nuevo siempre queda encima del anterior
 		image.Parent = wallGui
 
 		table.insert(preloadedWallComboImages, image)
@@ -1306,7 +1306,8 @@ local function showWallComboDecals(token)
 		local gui = preloadedWallComboGui
 		local images = preloadedWallComboImages
 		local total = #images
-		local frameTime = WALL_DECAL_DISPLAY_TIME + WALL_DECAL_COOLDOWN
+		local frameTime = WALL_DECAL_FRAME_TIME
+		local overlap = WALL_DECAL_OVERLAP_TIME
 
 		gui.Enabled = true
 		if preloadedWallComboBackground then
@@ -1315,7 +1316,8 @@ local function showWallComboDecals(token)
 		end
 
 		local startTime = os.clock()
-		local lastImage = nil
+		local firstShown = 1 -- frame más antiguo que sigue visible
+		local lastShown = 0  -- frame más nuevo mostrado
 		local connection = nil
 		local finished = false
 
@@ -1332,6 +1334,8 @@ local function showWallComboDecals(token)
 
 		-- El frame se calcula por TIEMPO (no con task.wait por frame), así la animación mantiene su
 		-- velocidad real: si hay lag se saltan frames en vez de ir más lenta o trabarse.
+		-- Cada frame empieza en (k-1)*frameTime y sigue visible hasta k*frameTime + overlap,
+		-- mientras el siguiente ya se reproduce encima, así nunca hay huecos vacíos.
 		connection = RunService.RenderStepped:Connect(function()
 			if token ~= sequence or not gui.Parent then
 				finish()
@@ -1339,25 +1343,32 @@ local function showWallComboDecals(token)
 			end
 
 			local elapsed = os.clock() - startTime
-			local index = math.floor(elapsed / frameTime) + 1
 
-			if index > total then
+			if elapsed >= total * frameTime + overlap then
 				finish()
 				return
 			end
 
-			local image = images[index]
+			local newestIndex = math.min(math.floor(elapsed / frameTime) + 1, total)
+			local oldestIndex = math.max(math.floor((elapsed - overlap) / frameTime) + 1, 1)
 
-			-- Solo se toca el frame anterior y el actual (no se recorren todos)
-			if lastImage and lastImage ~= image then
-				lastImage.Visible = false
-				lastImage.ImageTransparency = 1
+			-- Mostrar los frames nuevos (se salta lo que ya quedó viejo si hubo lag)
+			for index = math.max(lastShown + 1, oldestIndex), newestIndex do
+				local image = images[index]
+				image.Visible = true
+				image.ImageTransparency = 0
 			end
-			lastImage = image
+			lastShown = math.max(lastShown, newestIndex)
 
-			local showImage = (elapsed % frameTime) < WALL_DECAL_DISPLAY_TIME
-			image.Visible = showImage
-			image.ImageTransparency = showImage and 0 or 1
+			-- Ocultar los que ya cumplieron su tiempo
+			if oldestIndex > firstShown then
+				for index = firstShown, math.min(oldestIndex - 1, total) do
+					local image = images[index]
+					image.Visible = false
+					image.ImageTransparency = 1
+				end
+				firstShown = oldestIndex
+			end
 		end)
 	end)
 end
