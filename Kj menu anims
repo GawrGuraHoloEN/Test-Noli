@@ -29,6 +29,7 @@ local savedWalkSpeed = nil
 local savedAutoRotate = nil
 local savedAnchored = nil
 local wallComboCloneHandle = nil
+local wallComboImpactFolder = nil
 local savedCameraMaxZoom = nil
 local savedCameraMinZoom = nil
 local playerControls = nil
@@ -843,6 +844,12 @@ function stopCurrent()
 		wallComboCloneHandle.destroy()
 		wallComboCloneHandle = nil
 	end
+
+	-- También el cráter y las partes del impacto
+	if wallComboImpactFolder then
+		wallComboImpactFolder:Destroy()
+		wallComboImpactFolder = nil
+	end
 end
 
 ----------------------------------------------------------------
@@ -1504,7 +1511,7 @@ local function spawnWallComboClone(token)
 
 		-- Si algo lo elimina antes de los 10 s, se recrea
 		clone.Destroying:Connect(function()
-			if expired or respawns >= 10 then return end
+			if expired or respawns >= 10 or handle.noRespawn then return end
 			respawns += 1
 			task.defer(place)
 		end)
@@ -1531,7 +1538,11 @@ local function spawnWallComboClone(token)
 	wallComboCloneHandle = handle
 
 	-- Tiempo de vida propio (sin Debris, que puede eliminar objetos antes si se llena)
-	task.delay(WALL_COMBO_CLONE_LIFETIME, handle.destroy)
+	task.delay(WALL_COMBO_CLONE_LIFETIME, function()
+		-- Si el clon está en su secuencia de impacto, esa secuencia decide cuándo eliminarlo
+		if handle.keepAlive then return end
+		handle.destroy()
+	end)
 
 	return handle
 end
@@ -1564,10 +1575,12 @@ local function getWallComboVfxTemplate(name)
 end
 
 -- Copia un VFX sobre una pieza. Si es un Folder, se copia cada hijo igual que los demás.
-local function placeVfxOnPart(template, targetPart, results)
+local function placeVfxOnPart(template, targetPart, results, rotationOffset)
+	rotationOffset = rotationOffset or CFrame.new()
+
 	if template:IsA("Folder") then
 		for _, child in ipairs(template:GetChildren()) do
-			placeVfxOnPart(child, targetPart, results)
+			placeVfxOnPart(child, targetPart, results, rotationOffset)
 		end
 		return
 	end
@@ -1576,14 +1589,14 @@ local function placeVfxOnPart(template, targetPart, results)
 
 	if object:IsA("Attachment") then
 		object.Parent = targetPart
-		object.Position = Vector3.zero
+		object.CFrame = rotationOffset
 	elseif object:IsA("BasePart") then
 		object.Anchored = false
 		object.CanCollide = false
 		object.CanQuery = false
 		object.CanTouch = false
 		object.Massless = true
-		object.CFrame = targetPart.CFrame
+		object.CFrame = targetPart.CFrame * rotationOffset
 		object.Parent = targetPart
 
 		local weld = Instance.new("WeldConstraint")
@@ -1592,7 +1605,7 @@ local function placeVfxOnPart(template, targetPart, results)
 		weld.Parent = object
 	elseif object:IsA("Model") then
 		object.Parent = workspace
-		object:PivotTo(targetPart.CFrame)
+		object:PivotTo(targetPart.CFrame * rotationOffset)
 
 		local main = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
 		for _, part in ipairs(object:GetDescendants()) do
@@ -1637,7 +1650,7 @@ local function emitBurst(instance, defaultCount)
 end
 
 -- Coloca un VFX de KJWallCombo sobre una pieza, lo emite y lo elimina tras "lifetime" segundos
-local function spawnWallComboVfx(name, targetPart, lifetime, defaultCount, token)
+local function spawnWallComboVfx(name, targetPart, lifetime, defaultCount, token, rotationOffset)
 	if token ~= sequence then return {} end
 	if not targetPart or not targetPart.Parent then return {} end
 
@@ -1645,7 +1658,7 @@ local function spawnWallComboVfx(name, targetPart, lifetime, defaultCount, token
 	if not template then return {} end
 
 	local results = {}
-	placeVfxOnPart(template, targetPart, results)
+	placeVfxOnPart(template, targetPart, results, rotationOffset)
 
 	for _, object in ipairs(results) do
 		table.insert(currentVfx, object)
@@ -1654,6 +1667,500 @@ local function spawnWallComboVfx(name, targetPart, lifetime, defaultCount, token
 	end
 
 	return results
+end
+
+----------------------------------------------------------------
+-- Impacto del clon: vuelo ragdoll, cráter y partes (Wall Combo)
+----------------------------------------------------------------
+
+local CLONE_FLY_SPEED = 110            -- velocidad hacia la izquierda del jugador
+local CLONE_FLY_UP = 45                -- impulso hacia arriba
+local CLONE_TOUCH_GRACE = 0.12         -- tiempo en el que se ignoran toques (el clon empieza pegado al suelo)
+local CLONE_MAX_TIME = 12              -- tiempo máximo de toda la secuencia ragdoll
+local CLONE_SETTLE_SPEED = 3           -- por debajo de esta velocidad se considera que se detuvo
+local CLONE_SETTLE_TIME = 0.9          -- durante cuánto tiempo debe estar detenido
+local CLONE_GETUP_WAIT = 2             -- segundos que espera de pie antes de eliminarlo
+local IMPACT_KEEP_TIME = 4             -- segundos extra que se mantienen el cráter y las partes
+local IMPACT_SOUND_ID = "4307204452"
+local CRATER_PART_COUNT = 8
+local CRATER_PART_SIZE = 4             -- 4x4x4 studs
+local CRATER_CLONE_DISTANCE = 2        -- distancia mínima entre el clon y cada parte
+local CRATER_PART_GAP = 1              -- separación entre partes vecinas
+local CRATER_BURIAL = 1.5              -- studs enterrados en la superficie
+local CRATER_TILT = 15                 -- grados de inclinación mirando al clon
+local SMALL_PART_INTERVAL = 0.3        -- cada cuánto se crea una parte pequeña
+local R15_IDLE_ANIMATION = "507766666"
+local R6_IDLE_ANIMATION = "180435571"
+
+local impactRandom = Random.new()
+
+local function getSurfaceColorAndMaterial(result)
+	local instance = result.Instance
+
+	if instance:IsA("Terrain") then
+		return workspace.Terrain:GetMaterialColor(result.Material), result.Material
+	end
+
+	return instance.Color, instance.Material
+end
+
+-- Busca la superficie más cercana al origen (suelo, pared, etc.)
+local function findSurface(origin, preferredDirection, ignoreList)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignoreList
+	params.RespectCanCollide = true
+
+	local directions = {
+		Vector3.new(0, -1, 0),
+		Vector3.new(1, 0, 0),
+		Vector3.new(-1, 0, 0),
+		Vector3.new(0, 0, 1),
+		Vector3.new(0, 0, -1),
+		Vector3.new(0, 1, 0),
+	}
+
+	if preferredDirection and preferredDirection.Magnitude > 0.1 then
+		table.insert(directions, 1, preferredDirection.Unit)
+	end
+
+	local best = nil
+	local bestDistance = math.huge
+
+	for _, direction in ipairs(directions) do
+		local result = workspace:Raycast(origin, direction * 8, params)
+		if result then
+			local distance = (result.Position - origin).Magnitude
+			if distance < bestDistance then
+				best = result
+				bestDistance = distance
+			end
+		end
+	end
+
+	return best
+end
+
+-- Convierte al clon en ragdoll. Devuelve una función para deshacerlo.
+local function ragdollClone(clone, humanoid)
+	humanoid.PlatformStand = true
+	humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+
+	local created = {}
+	local motors = {}
+
+	for _, descendant in ipairs(clone:GetDescendants()) do
+		if descendant:IsA("Motor6D") and descendant.Part0 and descendant.Part1 then
+			-- La unión del HumanoidRootPart se conserva
+			if descendant.Part0.Name ~= "HumanoidRootPart" and descendant.Part1.Name ~= "HumanoidRootPart" then
+				local attachment0 = Instance.new("Attachment")
+				attachment0.CFrame = descendant.C0
+				attachment0.Parent = descendant.Part0
+
+				local attachment1 = Instance.new("Attachment")
+				attachment1.CFrame = descendant.C1
+				attachment1.Parent = descendant.Part1
+
+				local socket = Instance.new("BallSocketConstraint")
+				socket.Attachment0 = attachment0
+				socket.Attachment1 = attachment1
+				socket.LimitsEnabled = true
+				socket.UpperAngle = 50
+				socket.TwistLimitsEnabled = true
+				socket.TwistLowerAngle = -30
+				socket.TwistUpperAngle = 30
+				socket.Parent = descendant.Part0
+
+				-- Las partes unidas no chocan entre sí
+				local noCollision = Instance.new("NoCollisionConstraint")
+				noCollision.Part0 = descendant.Part0
+				noCollision.Part1 = descendant.Part1
+				noCollision.Parent = descendant.Part0
+
+				table.insert(created, attachment0)
+				table.insert(created, attachment1)
+				table.insert(created, socket)
+				table.insert(created, noCollision)
+
+				descendant.Enabled = false
+				table.insert(motors, descendant)
+			end
+		end
+	end
+
+	return function()
+		for _, object in ipairs(created) do
+			if object and object.Parent then
+				object:Destroy()
+			end
+		end
+		for _, motor in ipairs(motors) do
+			if motor and motor.Parent then
+				motor.Enabled = true
+			end
+		end
+	end
+end
+
+local function createCrater(folder, center, normal, color, material)
+	local base = CFrame.lookAt(center, center + normal) -- sus ejes X/Y son el plano de la superficie
+	local radius = math.max(
+		CRATER_CLONE_DISTANCE + CRATER_PART_SIZE / 2,
+		(CRATER_PART_SIZE + CRATER_PART_GAP) / (2 * math.sin(math.pi / CRATER_PART_COUNT))
+	)
+	local lift = normal * (CRATER_PART_SIZE / 2 - CRATER_BURIAL)
+
+	for index = 1, CRATER_PART_COUNT do
+		local angle = (index - 1) * (2 * math.pi / CRATER_PART_COUNT)
+		local offset = base.RightVector * math.cos(angle) * radius + base.UpVector * math.sin(angle) * radius
+
+		local position = center + offset + lift
+		local lookTarget = center + lift
+
+		local part = Instance.new("Part")
+		part.Name = "CraterPart"
+		part.Size = Vector3.one * CRATER_PART_SIZE
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.Color = color
+		part.Material = material
+		-- Mirando al clon, inclinado 15 grados
+		part.CFrame = CFrame.lookAt(position, lookTarget, normal) * CFrame.Angles(math.rad(CRATER_TILT), 0, 0)
+		part.Parent = folder
+	end
+end
+
+local function createSmallPart(folder, position, normal, color, material)
+	local base = CFrame.lookAt(position, position + normal)
+	local jitter = base.RightVector * impactRandom:NextNumber(-1.5, 1.5)
+		+ base.UpVector * impactRandom:NextNumber(-1.5, 1.5)
+
+	local part = Instance.new("Part")
+	part.Name = "ImpactDebris"
+	part.Size = Vector3.new(
+		impactRandom:NextNumber(0.6, 1.6),
+		impactRandom:NextNumber(0.6, 1.6),
+		impactRandom:NextNumber(0.6, 1.6)
+	)
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.Color = color
+	part.Material = material
+	-- Centro sobre la superficie: queda medio enterrada
+	part.CFrame = CFrame.new(position + jitter) * CFrame.Angles(
+		math.rad(impactRandom:NextNumber(0, 360)),
+		math.rad(impactRandom:NextNumber(0, 360)),
+		math.rad(impactRandom:NextNumber(0, 360))
+	)
+	part.Parent = folder
+end
+
+local function spawnUpSmoke(folder, position, color)
+	local resources = ReplicatedStorage:FindFirstChild("Resources")
+	local template = resources and resources:FindFirstChild("UpSmoke")
+	if not template then return end
+
+	-- Pieza fija e invisible: el humo se queda en esa posición y no sigue al clon
+	local holder = Instance.new("Part")
+	holder.Name = "UpSmokeHolder"
+	holder.Size = Vector3.one
+	holder.Transparency = 1
+	holder.Anchored = true
+	holder.CanCollide = false
+	holder.CanQuery = false
+	holder.CanTouch = false
+	holder.CFrame = CFrame.new(position)
+	holder.Parent = folder
+
+	local results = {}
+	placeVfxOnPart(template, holder, results)
+
+	for _, object in ipairs(results) do
+		local emitters = object:GetDescendants()
+		table.insert(emitters, object)
+
+		for _, emitter in ipairs(emitters) do
+			if emitter:IsA("ParticleEmitter") then
+				emitter.Color = ColorSequence.new(color)
+			end
+		end
+
+		emitBurst(object, 20)
+	end
+
+	task.delay(4, function()
+		if holder and holder.Parent then
+			holder:Destroy()
+		end
+	end)
+end
+
+local function launchWallComboClone(cloneHandle, token, playerRoot)
+	local clone = cloneHandle and cloneHandle.instance
+	if not clone or not clone.Parent then return end
+
+	local cloneRoot = clone:FindFirstChild("HumanoidRootPart")
+	local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
+	if not cloneRoot or not cloneHumanoid then return end
+
+	-- Mientras dure esta secuencia, el clon no se recrea ni expira por su tiempo de vida normal
+	cloneHandle.noRespawn = true
+	cloneHandle.keepAlive = true
+
+	if wallComboImpactFolder then
+		wallComboImpactFolder:Destroy()
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = "WallComboImpact"
+	folder.Parent = workspace
+	wallComboImpactFolder = folder
+
+	local torso = clone:FindFirstChild("Torso") or clone:FindFirstChild("UpperTorso") or cloneRoot
+	local playerCharacter = player.Character
+	local ignoreList = { clone, folder }
+	if playerCharacter then
+		table.insert(ignoreList, playerCharacter)
+	end
+
+	local function isAlive()
+		return token == sequence
+			and cloneHandle.instance == clone
+			and clone.Parent ~= nil
+			and folder.Parent ~= nil
+	end
+
+	-- Detener animaciones del clon (el ragdoll las reemplaza)
+	local animator = cloneHumanoid:FindFirstChildOfClass("Animator")
+	if animator then
+		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			track:Stop(0)
+		end
+	end
+
+	local restoreJoints = ragdollClone(clone, cloneHumanoid)
+
+	-- Partes del clon con colisión (menos el HumanoidRootPart) y sin chocar con el jugador
+	local cloneParts = {}
+	for _, child in ipairs(clone:GetChildren()) do
+		if child:IsA("BasePart") then
+			table.insert(cloneParts, child)
+			if child ~= cloneRoot then
+				child.CanCollide = true
+			end
+		end
+	end
+
+	if playerCharacter then
+		for _, clonePart in ipairs(cloneParts) do
+			for _, playerPart in ipairs(playerCharacter:GetChildren()) do
+				if playerPart:IsA("BasePart") then
+					local noCollision = Instance.new("NoCollisionConstraint")
+					noCollision.Part0 = clonePart
+					noCollision.Part1 = playerPart
+					noCollision.Parent = clonePart
+				end
+			end
+		end
+	end
+
+	-- Salir volando hacia la IZQUIERDA del jugador
+	local leftDirection = -playerRoot.CFrame.RightVector
+	leftDirection = Vector3.new(leftDirection.X, 0, leftDirection.Z)
+	leftDirection = leftDirection.Magnitude > 0 and leftDirection.Unit or Vector3.new(-1, 0, 0)
+
+	local launchTime = os.clock()
+	cloneRoot.Anchored = false
+
+	local velocity = leftDirection * CLONE_FLY_SPEED + Vector3.new(0, CLONE_FLY_UP, 0)
+	for _, part in ipairs(cloneParts) do
+		part.AssemblyLinearVelocity = velocity
+		part.AssemblyAngularVelocity = Vector3.new(
+			impactRandom:NextNumber(-8, 8),
+			impactRandom:NextNumber(-8, 8),
+			impactRandom:NextNumber(-8, 8)
+		)
+	end
+
+	-- Detección de toques (suelo, pared o lo que sea)
+	local touched = false
+	local connections = {}
+
+	local function isValidSurface(part)
+		if not part or not part.Parent then return false end
+		if not part.CanCollide then return false end
+		if part:IsDescendantOf(clone) or part:IsDescendantOf(folder) then return false end
+
+		local model = part:FindFirstAncestorOfClass("Model")
+		if model and model:FindFirstChildOfClass("Humanoid") then return false end
+
+		return true
+	end
+
+	for _, part in ipairs(cloneParts) do
+		table.insert(connections, part.Touched:Connect(function(other)
+			if os.clock() - launchTime < CLONE_TOUCH_GRACE then return end
+			if isValidSurface(other) then
+				touched = true
+			end
+		end))
+	end
+
+	local function disconnectAll()
+		for _, connection in ipairs(connections) do
+			connection:Disconnect()
+		end
+		table.clear(connections)
+	end
+
+	-- Espera un toque válido; acceptFn(surface) decide si cuenta. Devuelve la superficie o nil.
+	local function waitForSurface(timeout, acceptFn)
+		local startedAt = os.clock()
+		touched = false
+
+		while isAlive() and os.clock() - startedAt < timeout do
+			if touched then
+				touched = false
+				local surface = findSurface(torso.Position, torso.AssemblyLinearVelocity, ignoreList)
+				if surface and (not acceptFn or acceptFn(surface)) then
+					return surface
+				end
+			end
+			task.wait()
+		end
+
+		return nil
+	end
+
+	-- 1) Primer impacto: cráter, sonido y humo
+	local firstSurface = waitForSurface(CLONE_MAX_TIME, nil)
+	local firstWasWall = false
+
+	if firstSurface and isAlive() then
+		local color, material = getSurfaceColorAndMaterial(firstSurface)
+		local normal = firstSurface.Normal
+		local torsoPosition = torso.Position
+		firstWasWall = normal.Y < 0.7
+
+		-- Centro del cráter: la posición del torso proyectada sobre la superficie
+		local center = torsoPosition - normal * (torsoPosition - firstSurface.Position):Dot(normal)
+		createCrater(folder, center, normal, color, material)
+
+		-- Sonido en el clon
+		local sound = Instance.new("Sound")
+		sound.SoundId = "rbxassetid://" .. IMPACT_SOUND_ID
+		sound.Volume = 2
+		sound.Parent = torso
+		sound.Ended:Connect(function()
+			sound:Destroy()
+		end)
+		sound:Play()
+
+		-- Humo fijo en la posición del torso, del color de la superficie
+		spawnUpSmoke(folder, torsoPosition, color)
+	end
+
+	-- 2) Si fue pared, esperar a que toque de nuevo el suelo u otra superficie
+	if firstSurface and firstWasWall and isAlive() then
+		waitForSurface(6, function(surface)
+			return surface.Normal.Y > 0.7 or surface.Instance ~= firstSurface.Instance
+		end)
+	end
+
+	-- 3) Partes pequeñas enterradas cada 0.3 s hasta que el clon deje de moverse
+	if firstSurface then
+		local slowTime = 0
+
+		while isAlive() and os.clock() - launchTime < CLONE_MAX_TIME do
+			local surface = findSurface(torso.Position, Vector3.new(0, -1, 0), ignoreList)
+			if surface then
+				local color, material = getSurfaceColorAndMaterial(surface)
+				createSmallPart(folder, surface.Position, surface.Normal, color, material)
+			end
+
+			task.wait(SMALL_PART_INTERVAL)
+
+			if torso.AssemblyLinearVelocity.Magnitude < CLONE_SETTLE_SPEED then
+				slowTime += SMALL_PART_INTERVAL
+			else
+				slowTime = 0
+			end
+
+			if slowTime >= CLONE_SETTLE_TIME then
+				break
+			end
+		end
+	end
+
+	disconnectAll()
+	if not isAlive() then return end
+
+	-- 4) Levantarse normal (sin ragdoll)
+	restoreJoints()
+
+	local rootPosition = cloneRoot.Position
+	local groundParams = RaycastParams.new()
+	groundParams.FilterType = Enum.RaycastFilterType.Exclude
+	groundParams.FilterDescendantsInstances = ignoreList
+	groundParams.RespectCanCollide = true
+
+	local groundResult = workspace:Raycast(torso.Position, Vector3.new(0, -15, 0), groundParams)
+	local rootHeight = (cloneHumanoid.RigType == Enum.HumanoidRigType.R15)
+		and (cloneHumanoid.HipHeight + cloneRoot.Size.Y / 2)
+		or 3
+	local standY = groundResult and (groundResult.Position.Y + rootHeight) or rootPosition.Y
+	local standPosition = Vector3.new(rootPosition.X, standY, rootPosition.Z)
+
+	-- De pie, mirando hacia el jugador
+	local lookAtPlayer = Vector3.new(playerRoot.Position.X, standPosition.Y, playerRoot.Position.Z)
+	local standCFrame = (lookAtPlayer - standPosition).Magnitude > 0.1
+		and CFrame.lookAt(standPosition, lookAtPlayer)
+		or CFrame.new(standPosition)
+
+	cloneRoot.Anchored = true
+	clone:PivotTo(standCFrame)
+	cloneHumanoid.PlatformStand = false
+
+	local idleId = (cloneHumanoid.RigType == Enum.HumanoidRigType.R15) and R15_IDLE_ANIMATION or R6_IDLE_ANIMATION
+	pcall(function()
+		local idleAnimation = Instance.new("Animation")
+		idleAnimation.AnimationId = "rbxassetid://" .. idleId
+		local idleTrack = (animator or cloneHumanoid:FindFirstChildOfClass("Animator")):LoadAnimation(idleAnimation)
+		idleAnimation:Destroy()
+		idleTrack.Looped = true
+		idleTrack:Play(0.2)
+	end)
+
+	-- 5) Esperar unos 2 segundos y eliminar el clon
+	local waitedUp = 0
+	while waitedUp < CLONE_GETUP_WAIT and isAlive() do
+		waitedUp += task.wait()
+	end
+	if not isAlive() then return end
+
+	cloneHandle.destroy()
+
+	-- 6) El cráter y las partes se mantienen unos segundos más y luego se eliminan
+	task.wait(IMPACT_KEEP_TIME)
+	if not folder.Parent then return end
+
+	for _, part in ipairs(folder:GetChildren()) do
+		if part:IsA("BasePart") then
+			TweenService:Create(part, TweenInfo.new(0.6), { Transparency = 1 }):Play()
+		end
+	end
+
+	task.wait(0.6)
+
+	if folder.Parent then
+		folder:Destroy()
+	end
+	if wallComboImpactFolder == folder then
+		wallComboImpactFolder = nil
+	end
 end
 
 local function playWallComboVfx(cloneHandle, token)
@@ -1741,7 +2248,11 @@ local function playWallComboVfx(cloneHandle, token)
 		if token ~= sequence then return end
 
 		if playerRoot and playerRoot.Parent then
-			spawnWallComboVfx("FinalImpact", playerRoot, WALL_COMBO_FINAL_LIFETIME, 3, token)
+			-- Rotado 90° a la izquierda de forma instantánea
+			spawnWallComboVfx("FinalImpact", playerRoot, WALL_COMBO_FINAL_LIFETIME, 3, token, CFrame.Angles(0, math.rad(90), 0))
+
+			-- El clon sale volando a la izquierda del jugador (ragdoll)
+			task.spawn(launchWallComboClone, cloneHandle, token, playerRoot)
 		end
 	end)
 end
