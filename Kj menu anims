@@ -1673,7 +1673,8 @@ end
 -- Impacto del clon: vuelo ragdoll, cráter y partes (Wall Combo)
 ----------------------------------------------------------------
 
-local CLONE_FLY_SPEED = 110            -- velocidad hacia la izquierda del jugador
+local CLONE_FLY_SPEED = 130            -- velocidad hacia la izquierda del jugador
+local CLONE_LAUNCH_DELAY = 0.3          -- espera antes de mandar volando al clon
 local CLONE_FLY_UP = 45                -- impulso hacia arriba
 local CLONE_TOUCH_GRACE = 0.12         -- tiempo en el que se ignoran toques (el clon empieza pegado al suelo)
 local CLONE_MAX_TIME = 12              -- tiempo máximo de toda la secuencia ragdoll
@@ -1686,8 +1687,8 @@ local CRATER_PART_COUNT = 8
 local CRATER_PART_SIZE = 4             -- 4x4x4 studs
 local CRATER_CLONE_DISTANCE = 2        -- distancia mínima entre el clon y cada parte
 local CRATER_PART_GAP = 1              -- separación entre partes vecinas
-local CRATER_BURIAL = 1.5              -- studs enterrados en la superficie
-local CRATER_TILT = 15                 -- grados de inclinación mirando al clon
+local CRATER_BURIAL = 2.2              -- studs enterrados en la superficie
+local CRATER_TILT = -15                -- grados de inclinación mirando al clon
 local SMALL_PART_INTERVAL = 0.3        -- cada cuánto se crea una parte pequeña
 local R15_IDLE_ANIMATION = "507766666"
 local R6_IDLE_ANIMATION = "180435571"
@@ -1910,6 +1911,10 @@ local function launchWallComboClone(cloneHandle, token, playerRoot)
 	-- Mientras dure esta secuencia, el clon no se recrea ni expira por su tiempo de vida normal
 	cloneHandle.noRespawn = true
 	cloneHandle.keepAlive = true
+
+	-- Espera un poco antes de mandar volando al clon
+	task.wait(CLONE_LAUNCH_DELAY)
+	if token ~= sequence or cloneHandle.instance ~= clone or not clone.Parent then return end
 
 	if wallComboImpactFolder then
 		wallComboImpactFolder:Destroy()
