@@ -52,7 +52,7 @@ local DROPKICK_CAMERA_START = 1          -- segundo en el que empieza (1 s antes
 local FINAL_VFX_NAME = "fine...Emit2"
 
 local WALL_DECAL_DELAY = 2.9
-local WALL_DECAL_DISPLAY_TIME = 0.02
+local WALL_DECAL_DISPLAY_TIME = 0.03
 local WALL_DECAL_COOLDOWN = 0.02
 
 -- Wall Combo preload
@@ -1858,7 +1858,7 @@ addMove("Dropkick Hit", function(token)
 	local track = playAnimation("17420452843")
 	playSound("17363374089", 0, token)
 	playSound("17363383992", 0, token)
-	playSound("17419337758", 4.7, token) -- sonido a los 4.5 s
+	playSound("17419337758", 4.7, token) -- sonido a los 4.7 s
 
 	-- Congelar al jugador (sin moverse ni girar) hasta que la animación termine o sea interrumpida
 	freezePlayerDuringAnimation(track, token, 15.5)
