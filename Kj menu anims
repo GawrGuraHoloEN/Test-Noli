@@ -52,8 +52,8 @@ local DROPKICK_CAMERA_START = 1          -- segundo en el que empieza (1 s antes
 local FINAL_VFX_NAME = "fine...Emit2"
 
 local WALL_DECAL_DELAY = 2.9
-local WALL_DECAL_DISPLAY_TIME = 0.01
-local WALL_DECAL_COOLDOWN = 0.01
+local WALL_DECAL_DISPLAY_TIME = 0.02
+local WALL_DECAL_COOLDOWN = 0.02
 
 -- Wall Combo preload
 local preloadedWallComboGui = nil
