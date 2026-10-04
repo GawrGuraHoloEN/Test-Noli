@@ -59,6 +59,7 @@ local WALL_DECAL_COOLDOWN = 0.014
 local preloadedWallComboGui = nil
 local preloadedWallComboImages = {}
 local preloadedWallComboBackground = nil
+local wallComboWarming = false
 
 ----------------------------------------------------------------
 -- Personaje
@@ -1255,39 +1256,109 @@ local function preloadWallComboFrames()
 	pcall(function()
 		ContentProvider:PreloadAsync(preloadedWallComboImages)
 	end)
+
+	-- Calentamiento: dibuja cada imagen una vez (1x1 px, casi invisible) para que ya estén
+	-- decodificadas y subidas a la GPU. Así no hay tirones la primera vez que se muestran.
+	wallComboWarming = true
+	task.spawn(function()
+		wallGui.Enabled = true
+
+		for _, image in ipairs(preloadedWallComboImages) do
+			image.Size = UDim2.fromOffset(1, 1)
+			image.ImageTransparency = 0.99
+			image.Visible = true
+		end
+
+		task.wait(0.3)
+
+		for _, image in ipairs(preloadedWallComboImages) do
+			if image.Parent then
+				image.Visible = false
+				image.ImageTransparency = 1
+				image.Size = UDim2.fromScale(1, 1)
+			end
+		end
+
+		if wallGui.Parent then
+			wallGui.Enabled = false
+		end
+
+		wallComboWarming = false
+	end)
 end
 
 local function showWallComboDecals(token)
 	task.delay(WALL_DECAL_DELAY, function()
 		if token ~= sequence then return end
-		if not preloadedWallComboGui or not preloadedWallComboGui.Parent then preloadWallComboFrames() end
+
+		if not preloadedWallComboGui or not preloadedWallComboGui.Parent then
+			preloadWallComboFrames()
+		end
 		if not preloadedWallComboGui or #preloadedWallComboImages == 0 then return end
 
-		preloadedWallComboGui.Enabled = true
+		-- Esperar a que termine el calentamiento de imágenes (máx. 3 s)
+		local waited = 0
+		while wallComboWarming and waited < 3 do
+			waited += task.wait()
+		end
+		if token ~= sequence or not preloadedWallComboGui.Parent then return end
+
+		local gui = preloadedWallComboGui
+		local images = preloadedWallComboImages
+		local total = #images
+		local frameTime = WALL_DECAL_DISPLAY_TIME + WALL_DECAL_COOLDOWN
+
+		gui.Enabled = true
 		if preloadedWallComboBackground then
 			preloadedWallComboBackground.Visible = true
 			preloadedWallComboBackground.BackgroundTransparency = 0
 		end
 
-		for _, image in ipairs(preloadedWallComboImages) do
-			if token ~= sequence or not preloadedWallComboGui.Parent then
-				hideWallComboFrames()
+		local startTime = os.clock()
+		local lastImage = nil
+		local connection = nil
+		local finished = false
+
+		local function finish()
+			if finished then return end
+			finished = true
+
+			if connection then
+				connection:Disconnect()
+				connection = nil
+			end
+			hideWallComboFrames()
+		end
+
+		-- El frame se calcula por TIEMPO (no con task.wait por frame), así la animación mantiene su
+		-- velocidad real: si hay lag se saltan frames en vez de ir más lenta o trabarse.
+		connection = RunService.RenderStepped:Connect(function()
+			if token ~= sequence or not gui.Parent then
+				finish()
 				return
 			end
 
-			for _, otherImage in ipairs(preloadedWallComboImages) do
-				otherImage.Visible = false
-				otherImage.ImageTransparency = 1
+			local elapsed = os.clock() - startTime
+			local index = math.floor(elapsed / frameTime) + 1
+
+			if index > total then
+				finish()
+				return
 			end
 
-			image.Visible = true
-			image.ImageTransparency = 0
-			task.wait(WALL_DECAL_DISPLAY_TIME)
-			image.ImageTransparency = 1
-			image.Visible = false
-			task.wait(WALL_DECAL_COOLDOWN)
-		end
-		hideWallComboFrames()
+			local image = images[index]
+
+			-- Solo se toca el frame anterior y el actual (no se recorren todos)
+			if lastImage and lastImage ~= image then
+				lastImage.Visible = false
+				lastImage.ImageTransparency = 1
+			end
+			lastImage = image
+
+			local showImage = (elapsed % frameTime) < WALL_DECAL_DISPLAY_TIME
+			image.Visible = showImage
+			image.ImageTransparency = showImage and 0 or 1
+		end)
 	end)
 end
 
@@ -1787,6 +1858,7 @@ addMove("Dropkick Hit", function(token)
 	local track = playAnimation("17420452843")
 	playSound("17363374089", 0, token)
 	playSound("17363383992", 0, token)
+	playSound("17419337758", 4.5, token) -- sonido a los 4.5 s
 
 	-- Congelar al jugador (sin moverse ni girar) hasta que la animación termine o sea interrumpida
 	freezePlayerDuringAnimation(track, token, 15.5)
@@ -1802,6 +1874,10 @@ addMove("Dropkick Hit", function(token)
 
 		-- Teletransporte instantáneo 170 studs hacia donde mira el jugador
 		root.CFrame = root.CFrame + root.CFrame.LookVector * 170
+
+		-- Sonidos al mismo tiempo que el teletransporte
+		createSound("17420207822", token)
+		createSound("17429102979", token)
 	end)
 end)
 
