@@ -2312,9 +2312,8 @@ end
 -- Swift Sweep + Sweep Hit
 ----------------------------------------------------------------
 
-local SWEEP_HIT_RANGE = 1                  -- studs delante del usuario (HRP a HRP)
-local SWEEP_HIT_RANGE_TOLERANCE = 0.5      -- margen extra al medir esa distancia
-local SWEEP_HIT_LATERAL = 1.5              -- qué tan centrado debe estar delante del usuario
+local SWEEP_DETECT_SIZE = Vector3.new(1, 1, 1)   -- tamaño del bloque invisible de detección
+local SWEEP_DETECT_DISTANCE = 1                    -- a cuántos studs delante del usuario está el bloque
 local SWEEP_HIT_WAIT = 0.4                 -- espera antes de convertirse en Sweep Hit
 local SWEEP_HIT_HOLD_DISTANCE = 1.5        -- el otro jugador queda anclado a esta distancia, enfrente
 local SWEEP_HIT_ANIM = "16944345619"       -- animación del usuario (Sweep Hit)
@@ -2331,36 +2330,46 @@ local SWEEP_KNOCKBACK_PAUSE_CHECK = 0.2    -- a los 0.2 s se revisa si toca una 
 local SWEEP_KNOCKBACK_MAX_TIME = 8
 local SWEEP_GRAVITY = 196.2
 
-local function isPlayerInFront(otherPlayer, myRoot)
-	local otherCharacter = otherPlayer.Character
-	local otherRoot = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
-	local otherHumanoid = otherCharacter and otherCharacter:FindFirstChildOfClass("Humanoid")
-	if not otherRoot or not otherHumanoid or otherHumanoid.Health <= 0 then
-		return false, math.huge
-	end
+-- Bloque invisible delante del usuario que sirve para detectar a otro jugador
+local function createSweepDetectionBlock(myRoot)
+	local block = Instance.new("Part")
+	block.Name = "SweepDetectionBlock"
+	block.Size = SWEEP_DETECT_SIZE
+	block.Transparency = 1
+	block.Anchored = true
+	block.CanCollide = false
+	block.CanTouch = false
+	block.CFrame = myRoot.CFrame * CFrame.new(0, 0, -SWEEP_DETECT_DISTANCE)
+	block.Parent = workspace
 
-	local offset = otherRoot.Position - myRoot.Position
-	local forward = offset:Dot(myRoot.CFrame.LookVector)
-	local lateral = math.abs(offset:Dot(myRoot.CFrame.RightVector))
-
-	local inFront = forward > 0
-		and forward <= SWEEP_HIT_RANGE + SWEEP_HIT_RANGE_TOLERANCE
-		and lateral <= SWEEP_HIT_LATERAL
-		and math.abs(offset.Y) <= 3
-
-	return inFront, forward
+	table.insert(currentVfx, block)
+	return block
 end
 
-local function findPlayerInFront(myRoot)
-	local nearest = nil
-	local nearestForward = math.huge
+-- Devuelve el otro jugador (el más cercano) que esté tocando el bloque
+local function getPlayerInBlock(block, myRoot)
+	if not block or not block.Parent or not myRoot then return nil end
 
-	for _, otherPlayer in ipairs(Players:GetPlayers()) do
-		if otherPlayer ~= player then
-			local inFront, forward = isPlayerInFront(otherPlayer, myRoot)
-			if inFront and forward < nearestForward then
+	-- El bloque se coloca justo delante del usuario en este momento
+	block.CFrame = myRoot.CFrame * CFrame.new(0, 0, -SWEEP_DETECT_DISTANCE)
+
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { player.Character, block }
+
+	local nearest = nil
+	local nearestDistance = math.huge
+
+	for _, part in ipairs(workspace:GetPartsInPart(block, params)) do
+		local model = part:FindFirstAncestorOfClass("Model")
+		local otherPlayer = model and Players:GetPlayerFromCharacter(model)
+		local otherHumanoid = model and model:FindFirstChildOfClass("Humanoid")
+
+		if otherPlayer and otherPlayer ~= player and otherHumanoid and otherHumanoid.Health > 0 then
+			local distance = (part.Position - block.Position).Magnitude
+			if distance < nearestDistance then
 				nearest = otherPlayer
-				nearestForward = forward
+				nearestDistance = distance
 			end
 		end
 	end
@@ -2837,7 +2846,8 @@ addMove("20 Series Alt", function(token)
 	startUltMusicAfter(6.5, token)
 end)
 
-addMove("Swift Sweep", function(token)
+-- Swift Sweep: ya no está en el menú, se usa con la herramienta "Swift Sweep"
+moves["Swift Sweep"] = function(token)
 	local sweepTrack = playAnimation("16944265635")
 	playSound("16944636115", 0, token)
 
@@ -2848,26 +2858,39 @@ addMove("Swift Sweep", function(token)
 		playParticleSpinner(token, state)
 	end)
 
-	-- Sweep Hit: si hay otro jugador delante a 1 stud, se espera 0.4 s y, si sigue ahí, se convierte en Sweep Hit
+	-- Sweep Hit: se crea un bloque invisible delante del usuario para detectar a otro jugador
 	local character = player.Character
 	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
-	local victimPlayer = myRoot and findPlayerInFront(myRoot)
+	if not myRoot then return end
 
-	if victimPlayer then
-		task.delay(SWEEP_HIT_WAIT, function()
-			if token ~= sequence then return end
+	local block = createSweepDetectionBlock(myRoot)
+	local victimPlayer = getPlayerInBlock(block, myRoot)
 
-			local currentCharacter = player.Character
-			local currentRoot = currentCharacter and currentCharacter:FindFirstChild("HumanoidRootPart")
-			if not currentRoot then return end
-
-			-- Si el otro jugador ya no está delante, sigue el Swift Sweep normal
-			if not isPlayerInFront(victimPlayer, currentRoot) then return end
-
-			startSweepHit(sweepTrack, victimPlayer, token)
-		end)
+	if not victimPlayer then
+		block:Destroy()
+		return
 	end
-end)
+
+	-- Hay alguien en el bloque: se espera 0.4 s y se vuelve a comprobar
+	task.delay(SWEEP_HIT_WAIT, function()
+		local currentCharacter = player.Character
+		local currentRoot = currentCharacter and currentCharacter:FindFirstChild("HumanoidRootPart")
+
+		local stillThere = nil
+		if token == sequence and currentRoot then
+			stillThere = getPlayerInBlock(block, currentRoot)
+		end
+
+		if block and block.Parent then
+			block:Destroy()
+		end
+
+		-- Si el otro jugador ya no está ahí, sigue el Swift Sweep normal
+		if token ~= sequence or stillThere ~= victimPlayer then return end
+
+		startSweepHit(sweepTrack, victimPlayer, token)
+	end)
+end
 
 addMove("Swift Sweep Kick", function(token)
 	playAnimation("16944345619")
@@ -3234,6 +3257,30 @@ task.spawn(function()
 end)
 
 ----------------------------------------------------------------
+-- Herramienta "Swift Sweep" (solo después de la animación de spawn)
+----------------------------------------------------------------
+
+local function giveSwiftSweepTool(character)
+	if not character or character ~= player.Character or not character.Parent then return end
+
+	local backpack = player:FindFirstChild("Backpack")
+	if not backpack then return end
+	if backpack:FindFirstChild("Swift Sweep") or character:FindFirstChild("Swift Sweep") then return end
+
+	local tool = Instance.new("Tool")
+	tool.Name = "Swift Sweep"
+	tool.ToolTip = "Swift Sweep"
+	tool.RequiresHandle = false
+	tool.CanBeDropped = false
+
+	tool.Activated:Connect(function()
+		startMove("Swift Sweep")
+	end)
+
+	tool.Parent = backpack
+end
+
+----------------------------------------------------------------
 -- Animación al Spawnear (Custom con Phone Drop ajustado)
 ----------------------------------------------------------------
 
@@ -3460,6 +3507,9 @@ local function playCustomSpawn(character, humanoid, animator)
 				spawnConn:Disconnect()
 				spawnConn = nil
 			end
+
+			-- La animación de spawn ya se reprodujo: se entrega la herramienta
+			giveSwiftSweepTool(character)
 			return
 		end
 
@@ -3475,6 +3525,9 @@ local function playCustomSpawn(character, humanoid, animator)
 				spawnConn:Disconnect()
 				spawnConn = nil
 			end
+
+			-- La animación de spawn ya se reprodujo: se entrega la herramienta
+			giveSwiftSweepTool(character)
 			return
 		end
 
