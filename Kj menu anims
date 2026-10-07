@@ -30,6 +30,7 @@ local savedAutoRotate = nil
 local savedAnchored = nil
 local wallComboCloneHandle = nil
 local wallComboImpactFolder = nil
+local sweepHitCleanup = nil
 local savedCameraMaxZoom = nil
 local savedCameraMinZoom = nil
 local playerControls = nil
@@ -849,6 +850,13 @@ function stopCurrent()
 	if wallComboImpactFolder then
 		wallComboImpactFolder:Destroy()
 		wallComboImpactFolder = nil
+	end
+
+	-- Si el Sweep Hit estaba en curso, se desancla al otro jugador y se detienen sus animaciones
+	if sweepHitCleanup then
+		local cleanup = sweepHitCleanup
+		sweepHitCleanup = nil
+		cleanup()
 	end
 end
 
@@ -2301,6 +2309,447 @@ local function playWallComboVfx(cloneHandle, token)
 end
 
 ----------------------------------------------------------------
+-- Swift Sweep + Sweep Hit
+----------------------------------------------------------------
+
+local SWEEP_HIT_RANGE = 1                  -- studs delante del usuario (HRP a HRP)
+local SWEEP_HIT_RANGE_TOLERANCE = 0.5      -- margen extra al medir esa distancia
+local SWEEP_HIT_LATERAL = 1.5              -- qué tan centrado debe estar delante del usuario
+local SWEEP_HIT_WAIT = 0.4                 -- espera antes de convertirse en Sweep Hit
+local SWEEP_HIT_HOLD_DISTANCE = 1.5        -- el otro jugador queda anclado a esta distancia, enfrente
+local SWEEP_HIT_ANIM = "16944345619"       -- animación del usuario (Sweep Hit)
+local SWEEP_HIT_SOUND = "16944654440"
+local SWEEP_HIT_VICTIM_ANIM = "16944744186"
+local SWEEP_HIT_MESH_COPIES = 4
+local SWEEP_HIT_MESH_LIFETIME = 0.1
+local SWEEP_FOLLOWUP_TIME = 0.6            -- a los 0.6 s: FollowUpCresc desaparece y se decide el empujón
+local SWEEP_FOLLOWUP_FADE_TIME = 0.1
+local SWEEP_FOLLOWUP_ANIM = "10471478869"
+local SWEEP_KNOCKBACK_DISTANCE = 20        -- studs hacia atrás
+local SWEEP_KNOCKBACK_SPEED = 70           -- studs por segundo
+local SWEEP_KNOCKBACK_PAUSE_CHECK = 0.2    -- a los 0.2 s se revisa si toca una superficie plana
+local SWEEP_KNOCKBACK_MAX_TIME = 8
+local SWEEP_GRAVITY = 196.2
+
+local function isPlayerInFront(otherPlayer, myRoot)
+	local otherCharacter = otherPlayer.Character
+	local otherRoot = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+	local otherHumanoid = otherCharacter and otherCharacter:FindFirstChildOfClass("Humanoid")
+	if not otherRoot or not otherHumanoid or otherHumanoid.Health <= 0 then
+		return false, math.huge
+	end
+
+	local offset = otherRoot.Position - myRoot.Position
+	local forward = offset:Dot(myRoot.CFrame.LookVector)
+	local lateral = math.abs(offset:Dot(myRoot.CFrame.RightVector))
+
+	local inFront = forward > 0
+		and forward <= SWEEP_HIT_RANGE + SWEEP_HIT_RANGE_TOLERANCE
+		and lateral <= SWEEP_HIT_LATERAL
+		and math.abs(offset.Y) <= 3
+
+	return inFront, forward
+end
+
+local function findPlayerInFront(myRoot)
+	local nearest = nil
+	local nearestForward = math.huge
+
+	for _, otherPlayer in ipairs(Players:GetPlayers()) do
+		if otherPlayer ~= player then
+			local inFront, forward = isPlayerInFront(otherPlayer, myRoot)
+			if inFront and forward < nearestForward then
+				nearest = otherPlayer
+				nearestForward = forward
+			end
+		end
+	end
+
+	return nearest
+end
+
+local function getHumanoidRootHeight(humanoid, root)
+	if humanoid.RigType == Enum.HumanoidRigType.R15 then
+		return humanoid.HipHeight + root.Size.Y / 2
+	end
+	return 3
+end
+
+local function flatDirection(vector, fallback)
+	local flat = Vector3.new(vector.X, 0, vector.Z)
+	if flat.Magnitude < 0.01 then
+		return fallback
+	end
+	return flat.Unit
+end
+
+-- SweepHitMesh: copia en el torso del otro jugador, rotación y tamaño aleatorios (alargado), dura 0.1 s
+local function spawnSweepHitMesh(torso, token)
+	if token ~= sequence then return end
+
+	local kjEffects = getKJEffects()
+	local template = kjEffects and kjEffects:FindFirstChild("SweepHitMesh")
+	if not template then return end
+
+	local object = template:Clone()
+	local cframe = CFrame.new(torso.Position) * CFrame.Angles(
+		math.rad(impactRandom:NextNumber(0, 360)),
+		math.rad(impactRandom:NextNumber(0, 360)),
+		math.rad(impactRandom:NextNumber(0, 360))
+	)
+
+	if object:IsA("BasePart") then
+		local base = object.Size
+		object.Size = Vector3.new(
+			base.X * impactRandom:NextNumber(0.6, 1.2),
+			base.Y * impactRandom:NextNumber(0.6, 1.2),
+			base.Z * impactRandom:NextNumber(2, 4) -- alargado
+		)
+		object.Anchored = true
+		object.CanCollide = false
+		object.CanQuery = false
+		object.CanTouch = false
+		object.CFrame = cframe
+		object.Parent = workspace
+	elseif object:IsA("Model") then
+		for _, part in ipairs(object:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = true
+				part.CanCollide = false
+				part.CanQuery = false
+				part.CanTouch = false
+			end
+		end
+		object.Parent = workspace
+		object:PivotTo(cframe)
+		pcall(function()
+			object:ScaleTo(impactRandom:NextNumber(1.2, 2.5))
+		end)
+	else
+		object.Parent = torso
+	end
+
+	table.insert(currentVfx, object)
+	Debris:AddItem(object, SWEEP_HIT_MESH_LIFETIME)
+	emitBurst(object, 1)
+end
+
+-- FollowUpCresc: pegado a la pierna derecha del usuario (la sigue), su decal pasa de 1 a 0.7 en 0.1 s
+local function playFollowUpCresc(character, token)
+	if token ~= sequence then return {} end
+
+	local kjEffects = getKJEffects()
+	local template = kjEffects and kjEffects:FindFirstChild("FollowUpCresc")
+	local leg = getRightLeg(character)
+	if not template or not leg then return {} end
+
+	local results = {}
+	placeVfxOnPart(template, leg, results)
+
+	for _, object in ipairs(results) do
+		table.insert(currentVfx, object)
+
+		local candidates = object:GetDescendants()
+		table.insert(candidates, object)
+
+		for _, candidate in ipairs(candidates) do
+			if candidate:IsA("Decal") then
+				candidate.Transparency = 1
+				TweenService:Create(
+					candidate,
+					TweenInfo.new(SWEEP_FOLLOWUP_FADE_TIME),
+					{ Transparency = 0.7 }
+				):Play()
+			end
+		end
+	end
+
+	return results
+end
+
+-- Ring: 2.5,1,2.5 rotado 90° en Y; en 0.2 s pasa a 10,0.1,10 y transparencia 1, y se elimina
+local function spawnRing(position, token)
+	if token ~= sequence then return end
+
+	local kjEffects = getKJEffects()
+	local template = kjEffects and kjEffects:FindFirstChild("Ring")
+	if not template then return end
+
+	local object = template:Clone()
+	local ringCFrame = CFrame.new(position) * CFrame.Angles(0, math.rad(90), 0)
+
+	if object:IsA("BasePart") then
+		object.Size = Vector3.new(2.5, 1, 2.5)
+		object.Anchored = true
+		object.CanCollide = false
+		object.CanQuery = false
+		object.CanTouch = false
+		object.CFrame = ringCFrame
+		object.Parent = workspace
+
+		local tweenInfo = TweenInfo.new(0.2)
+		TweenService:Create(object, tweenInfo, {
+			Size = Vector3.new(10, 0.1, 10),
+			Transparency = 1,
+		}):Play()
+
+		for _, descendant in ipairs(object:GetDescendants()) do
+			if descendant:IsA("Decal") or descendant:IsA("Texture") then
+				TweenService:Create(descendant, tweenInfo, { Transparency = 1 }):Play()
+			end
+		end
+	elseif object:IsA("Model") then
+		for _, part in ipairs(object:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = true
+				part.CanCollide = false
+				part.CanQuery = false
+				part.CanTouch = false
+			end
+		end
+		object.Parent = workspace
+		object:PivotTo(ringCFrame)
+	else
+		object.Parent = workspace
+	end
+
+	table.insert(currentVfx, object)
+	task.delay(0.2, function()
+		if object and object.Parent then
+			object:Destroy()
+		end
+	end)
+end
+
+local function startSweepHit(sweepTrack, victimPlayer, token)
+	local character = player.Character
+	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+
+	local victimCharacter = victimPlayer.Character
+	local victimRoot = victimCharacter and victimCharacter:FindFirstChild("HumanoidRootPart")
+	local victimHumanoid = victimCharacter and victimCharacter:FindFirstChildOfClass("Humanoid")
+	local victimTorso = victimCharacter and (victimCharacter:FindFirstChild("Torso") or victimCharacter:FindFirstChild("UpperTorso") or victimRoot)
+	if not myRoot or not victimRoot or not victimHumanoid or not victimTorso then return end
+
+	-- Se cancela SOLO la animación del Swift Sweep normal (los VFX siguen)
+	if sweepTrack then
+		sweepTrack:Stop(0.1)
+	end
+
+	-- Animación y sonido del Sweep Hit
+	playAnimation(SWEEP_HIT_ANIM)
+	playSound(SWEEP_HIT_SOUND, 0.1, token)
+
+	-- Preparar al otro jugador
+	local victimAnimator = victimHumanoid:FindFirstChildOfClass("Animator")
+	if not victimAnimator then
+		victimAnimator = Instance.new("Animator")
+		victimAnimator.Parent = victimHumanoid
+	end
+
+	local originalAnchored = victimRoot.Anchored
+	local victimTracks = {}
+
+	local function releaseVictim()
+		for _, track in ipairs(victimTracks) do
+			pcall(function()
+				track:Stop(0.1)
+			end)
+		end
+		table.clear(victimTracks)
+
+		if victimRoot and victimRoot.Parent then
+			victimRoot.Anchored = originalAnchored
+		end
+		if sweepHitCleanup == releaseVictim then
+			sweepHitCleanup = nil
+		end
+	end
+	sweepHitCleanup = releaseVictim
+
+	local function playOnVictim(id)
+		local animation = Instance.new("Animation")
+		animation.AnimationId = "rbxassetid://" .. tostring(id)
+		local track = victimAnimator:LoadAnimation(animation)
+		animation:Destroy()
+		track.Priority = Enum.AnimationPriority.Action4
+		track:Play(0.05)
+		table.insert(victimTracks, track)
+		return track
+	end
+
+	for _, track in ipairs(victimAnimator:GetPlayingAnimationTracks()) do
+		track:Stop(0)
+	end
+
+	-- Anclado justo enfrente del usuario, mirándolo
+	local userLook = flatDirection(myRoot.CFrame.LookVector, Vector3.new(0, 0, -1))
+	local frontPosition = Vector3.new(myRoot.Position.X, victimRoot.Position.Y, myRoot.Position.Z)
+		+ userLook * SWEEP_HIT_HOLD_DISTANCE
+	victimRoot.CFrame = CFrame.lookAt(frontPosition, Vector3.new(myRoot.Position.X, frontPosition.Y, myRoot.Position.Z))
+	victimRoot.Anchored = true
+
+	local hitTrack = playOnVictim(SWEEP_HIT_VICTIM_ANIM)
+
+	for _ = 1, SWEEP_HIT_MESH_COPIES do
+		spawnSweepHitMesh(victimTorso, token)
+	end
+
+	-- FollowUpCresc en la pierna derecha: aparece con tween y desaparece a los 0.6 s
+	local followUpObjects = playFollowUpCresc(character, token)
+	task.delay(SWEEP_FOLLOWUP_TIME, function()
+		for _, object in ipairs(followUpObjects) do
+			if object and object.Parent then
+				object:Destroy()
+			end
+		end
+	end)
+
+	-- Durante 0.6 s: ¿el usuario sigue viendo al otro jugador?
+	local startTime = os.clock()
+	local lostSight = false
+
+	while os.clock() - startTime < SWEEP_FOLLOWUP_TIME do
+		if token ~= sequence then return end
+
+		local toVictim = victimRoot.Position - myRoot.Position
+		local flatToVictim = Vector3.new(toVictim.X, 0, toVictim.Z)
+		local lookFlat = flatDirection(myRoot.CFrame.LookVector, userLook)
+
+		if flatToVictim.Magnitude > 0.01 and lookFlat:Dot(flatToVictim.Unit) < 0.7 then
+			lostSight = true
+			break
+		end
+
+		task.wait()
+	end
+
+	if token ~= sequence then return end
+
+	if lostSight then
+		-- Sin empujón: cuando termine la animación anterior se desancla al otro jugador
+		local waitStart = os.clock()
+		while hitTrack.IsPlaying and token == sequence and os.clock() - waitStart < 5 do
+			task.wait()
+		end
+
+		if token == sequence then
+			releaseVictim()
+		end
+		return
+	end
+
+	-- Sigue viéndolo: cancelar la animación anterior y reproducir la nueva
+	hitTrack:Stop(0.05)
+	local followTrack = playOnVictim(SWEEP_FOLLOWUP_ANIM)
+
+	spawnRing(victimRoot.Position, token)
+
+	-- Mandarlo 20 studs hacia atrás (lejos del usuario)
+	local backDirection = flatDirection(myRoot.CFrame.LookVector, userLook)
+	local rootHeight = getHumanoidRootHeight(victimHumanoid, victimRoot)
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character, victimCharacter }
+	params.RespectCanCollide = true
+
+	-- Superficie plana: suelo (normal hacia arriba) o pared vertical
+	local function getFlatContact()
+		local down = workspace:Raycast(victimRoot.Position, Vector3.new(0, -(rootHeight + 0.5), 0), params)
+		if down and down.Normal.Y > 0.9 then
+			return down
+		end
+
+		local back = workspace:Raycast(victimRoot.Position, backDirection * 1.6, params)
+		if back and math.abs(back.Normal.Y) < 0.2 then
+			return back
+		end
+
+		return nil
+	end
+
+	local traveled = 0
+	local paused = false
+	local checkedPause = false
+	local verticalSpeed = 0
+	local finished = false
+	local followStart = os.clock()
+
+	while not finished do
+		local dt = RunService.Heartbeat:Wait()
+		if token ~= sequence or not victimRoot.Parent then return end
+
+		local horizontal = SWEEP_KNOCKBACK_SPEED * dt
+		if not paused then
+			horizontal = math.min(horizontal, SWEEP_KNOCKBACK_DISTANCE - traveled)
+		end
+
+		-- Si hay algo delante, se frena justo antes
+		local hitWall = false
+		local wall = workspace:Raycast(victimRoot.Position, backDirection * (horizontal + 1.2), params)
+		if wall then
+			horizontal = math.max(0, wall.Distance - 1.2)
+			hitWall = true
+		end
+
+		-- Si ya se pausó la animación, cae con gravedad mientras sigue yendo hacia atrás
+		local vertical = 0
+		if paused then
+			verticalSpeed -= SWEEP_GRAVITY * dt
+			vertical = verticalSpeed * dt
+		end
+
+		victimRoot.CFrame = victimRoot.CFrame + backDirection * horizontal + Vector3.new(0, vertical, 0)
+		traveled += horizontal
+
+		if hitWall then
+			finished = true
+		elseif paused then
+			local contact = getFlatContact()
+			if contact then
+				if contact.Normal.Y > 0.9 then
+					local position = victimRoot.Position
+					victimRoot.CFrame = victimRoot.CFrame + Vector3.new(0, (contact.Position.Y + rootHeight) - position.Y, 0)
+				end
+				finished = true
+			end
+		elseif traveled >= SWEEP_KNOCKBACK_DISTANCE - 0.001 then
+			finished = true
+		end
+
+		-- A los 0.2 s de la última animación: si no toca una superficie plana, se pausa la animación
+		-- y sigue siendo mandado hacia atrás hasta que toque una
+		if not finished and not paused and not checkedPause
+			and os.clock() - followStart >= SWEEP_KNOCKBACK_PAUSE_CHECK then
+			checkedPause = true
+			if not getFlatContact() then
+				paused = true
+				followTrack:AdjustSpeed(0)
+			end
+		end
+
+		if os.clock() - followStart > SWEEP_KNOCKBACK_MAX_TIME then
+			finished = true
+		end
+	end
+
+	if paused then
+		followTrack:AdjustSpeed(1)
+	end
+
+	-- Al terminar la animación se desancla al otro jugador
+	local waitStart = os.clock()
+	while followTrack.IsPlaying and token == sequence and os.clock() - waitStart < 5 do
+		task.wait()
+	end
+
+	if token == sequence then
+		releaseVictim()
+	end
+end
+
+----------------------------------------------------------------
 -- Movimientos
 ----------------------------------------------------------------
 
@@ -2389,7 +2838,7 @@ addMove("20 Series Alt", function(token)
 end)
 
 addMove("Swift Sweep", function(token)
-	playAnimation("16944265635")
+	local sweepTrack = playAnimation("16944265635")
 	playSound("16944636115", 0, token)
 
 	task.delay(0.1, function()
@@ -2398,6 +2847,26 @@ addMove("Swift Sweep", function(token)
 		task.spawn(playSweepCresc, token, state)
 		playParticleSpinner(token, state)
 	end)
+
+	-- Sweep Hit: si hay otro jugador delante a 1 stud, se espera 0.4 s y, si sigue ahí, se convierte en Sweep Hit
+	local character = player.Character
+	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+	local victimPlayer = myRoot and findPlayerInFront(myRoot)
+
+	if victimPlayer then
+		task.delay(SWEEP_HIT_WAIT, function()
+			if token ~= sequence then return end
+
+			local currentCharacter = player.Character
+			local currentRoot = currentCharacter and currentCharacter:FindFirstChild("HumanoidRootPart")
+			if not currentRoot then return end
+
+			-- Si el otro jugador ya no está delante, sigue el Swift Sweep normal
+			if not isPlayerInFront(victimPlayer, currentRoot) then return end
+
+			startSweepHit(sweepTrack, victimPlayer, token)
+		end)
+	end
 end)
 
 addMove("Swift Sweep Kick", function(token)
