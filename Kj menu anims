@@ -2312,8 +2312,8 @@ end
 -- Swift Sweep + Sweep Hit
 ----------------------------------------------------------------
 
-local SWEEP_DETECT_SIZE = Vector3.new(1, 1, 1)   -- tamaño del bloque invisible de detección
-local SWEEP_DETECT_DISTANCE = 1                    -- a cuántos studs delante del usuario está el bloque
+local SWEEP_DETECT_DEPTH = 3     -- cuántos studs se extiende hacia adelante (ancho y alto = tamaño del jugador)
+local SWEEP_DETECT_START = 0.5   -- donde empieza, desde el HumanoidRootPart (su cara frontal)
 local SWEEP_HIT_WAIT = 0.4                 -- espera antes de convertirse en Sweep Hit
 local SWEEP_HIT_HOLD_DISTANCE = 1.5        -- el otro jugador queda anclado a esta distancia, enfrente
 local SWEEP_HIT_ANIM = "16944345619"       -- animación del usuario (Sweep Hit)
@@ -2321,7 +2321,7 @@ local SWEEP_HIT_SOUND = "16944654440"
 local SWEEP_HIT_VICTIM_ANIM = "16944744186"
 local SWEEP_HIT_MESH_COPIES = 4
 local SWEEP_HIT_MESH_LIFETIME = 0.1
-local SWEEP_FOLLOWUP_TIME = 0.6            -- a los 0.6 s: FollowUpCresc desaparece y se decide el empujón
+local SWEEP_FOLLOWUP_TIME = 0.5            -- a los 0.5 s: FollowUpCresc desaparece y se decide el empujón
 local SWEEP_FOLLOWUP_FADE_TIME = 0.1
 local SWEEP_FOLLOWUP_ANIM = "10471478869"
 local SWEEP_KNOCKBACK_DISTANCE = 20        -- studs hacia atrás
@@ -2334,12 +2334,15 @@ local SWEEP_GRAVITY = 196.2
 local function createSweepDetectionBlock(myRoot)
 	local block = Instance.new("Part")
 	block.Name = "SweepDetectionBlock"
-	block.Size = SWEEP_DETECT_SIZE
+	-- Ancho y alto del jugador, extendido hacia adelante
+	local character = player.Character
+	local extents = character and character:GetExtentsSize() or Vector3.new(4, 5, 1)
+	block.Size = Vector3.new(math.max(extents.X, 2), math.max(extents.Y, 3), SWEEP_DETECT_DEPTH)
 	block.Transparency = 1
 	block.Anchored = true
 	block.CanCollide = false
 	block.CanTouch = false
-	block.CFrame = myRoot.CFrame * CFrame.new(0, 0, -SWEEP_DETECT_DISTANCE)
+	block.CFrame = myRoot.CFrame * CFrame.new(0, 0, -(SWEEP_DETECT_START + SWEEP_DETECT_DEPTH / 2))
 	block.Parent = workspace
 
 	table.insert(currentVfx, block)
@@ -2351,7 +2354,7 @@ local function getPlayerInBlock(block, myRoot)
 	if not block or not block.Parent or not myRoot then return nil end
 
 	-- El bloque se coloca justo delante del usuario en este momento
-	block.CFrame = myRoot.CFrame * CFrame.new(0, 0, -SWEEP_DETECT_DISTANCE)
+	block.CFrame = myRoot.CFrame * CFrame.new(0, 0, -(SWEEP_DETECT_START + SWEEP_DETECT_DEPTH / 2))
 
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
@@ -2443,7 +2446,7 @@ local function spawnSweepHitMesh(torso, token)
 	emitBurst(object, 1)
 end
 
--- FollowUpCresc: pegado a la pierna derecha del usuario (la sigue), su decal pasa de 1 a 0.7 en 0.1 s
+-- FollowUpCresc: pegado a la pierna derecha del usuario (la sigue), su decal pasa de 1 a 0.6 en 0.1 s
 local function playFollowUpCresc(character, token)
 	if token ~= sequence then return {} end
 
@@ -2467,7 +2470,7 @@ local function playFollowUpCresc(character, token)
 				TweenService:Create(
 					candidate,
 					TweenInfo.new(SWEEP_FOLLOWUP_FADE_TIME),
-					{ Transparency = 0.7 }
+					{ Transparency = 0.6 }
 				):Play()
 			end
 		end
@@ -2476,7 +2479,7 @@ local function playFollowUpCresc(character, token)
 	return results
 end
 
--- Ring: 2.5,1,2.5 rotado 90° en Y; en 0.2 s pasa a 10,0.1,10 y transparencia 1, y se elimina
+-- Ring: 2.5,1,2.5 rotado 90° en Z; en 0.2 s pasa a 10,0.1,10 y transparencia 1, y se elimina
 local function spawnRing(position, token)
 	if token ~= sequence then return end
 
@@ -2485,7 +2488,7 @@ local function spawnRing(position, token)
 	if not template then return end
 
 	local object = template:Clone()
-	local ringCFrame = CFrame.new(position) * CFrame.Angles(0, math.rad(90), 0)
+	local ringCFrame = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
 
 	if object:IsA("BasePart") then
 		object.Size = Vector3.new(2.5, 1, 2.5)
@@ -2604,7 +2607,7 @@ local function startSweepHit(sweepTrack, victimPlayer, token)
 		spawnSweepHitMesh(victimTorso, token)
 	end
 
-	-- FollowUpCresc en la pierna derecha: aparece con tween y desaparece a los 0.6 s
+	-- FollowUpCresc en la pierna derecha: aparece con tween y desaparece a los 0.5 s
 	local followUpObjects = playFollowUpCresc(character, token)
 	task.delay(SWEEP_FOLLOWUP_TIME, function()
 		for _, object in ipairs(followUpObjects) do
@@ -2614,7 +2617,7 @@ local function startSweepHit(sweepTrack, victimPlayer, token)
 		end
 	end)
 
-	-- Durante 0.6 s: ¿el usuario sigue viendo al otro jugador?
+	-- Durante 0.5 s: ¿el usuario sigue viendo al otro jugador?
 	local startTime = os.clock()
 	local lostSight = false
 
@@ -3337,6 +3340,9 @@ local function playCustomSpawn(character, humanoid, animator)
 				child:Destroy()
 			end
 		end
+
+		-- Ya eliminadas las herramientas anteriores: se añade la herramienta "Swift Sweep"
+		giveSwiftSweepTool(character)
 		
 		local uiBar = playerGui:FindFirstChild("Bar", true)
 		if uiBar and uiBar.Parent == playerGui then
@@ -3508,8 +3514,6 @@ local function playCustomSpawn(character, humanoid, animator)
 				spawnConn = nil
 			end
 
-			-- La animación de spawn ya se reprodujo: se entrega la herramienta
-			giveSwiftSweepTool(character)
 			return
 		end
 
@@ -3526,8 +3530,6 @@ local function playCustomSpawn(character, humanoid, animator)
 				spawnConn = nil
 			end
 
-			-- La animación de spawn ya se reprodujo: se entrega la herramienta
-			giveSwiftSweepTool(character)
 			return
 		end
 
