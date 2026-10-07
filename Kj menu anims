@@ -1131,14 +1131,27 @@ local function emitOnce(object)
 	end
 end
 
+local PARTICLE_SPINNER_COPIES = 4            -- cuántas copias se crean
+local PARTICLE_SPINNER_COPY_INTERVAL = 0.05  -- cada cuánto se crea una copia
+
+-- Copia el particlespinner 4 veces (cada 0.05 s): a los 0, 0.05, 0.1 y 0.15 s,
+-- o sea antes de que el decal de SweepCresc empiece a hacerse invisible (a los 0.2 s)
 local function playParticleSpinner(token, state)
-	local object = attachVfxToRoot("particlespinner", token, state)
-	if not object then return end
+	for copy = 1, PARTICLE_SPINNER_COPIES do
+		if token ~= sequence then return end
 
-	emitOnce(object)
+		local object = attachVfxToRoot("particlespinner", token, state)
+		if object then
+			emitOnce(object)
 
-	-- Sigue al HumanoidRootPart y se elimina a los 5 s
-	Debris:AddItem(object, PARTICLE_SPINNER_DURATION)
+			-- Sigue al HumanoidRootPart y se elimina a los 5 s
+			Debris:AddItem(object, PARTICLE_SPINNER_DURATION)
+		end
+
+		if copy < PARTICLE_SPINNER_COPIES then
+			task.wait(PARTICLE_SPINNER_COPY_INTERVAL)
+		end
+	end
 end
 
 ----------------------------------------------------------------
