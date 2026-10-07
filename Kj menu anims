@@ -587,8 +587,8 @@ local function freezePlayerDuringAnimation(track, token, unanchorAfter)
 	}
 end
 
--- Impide que el jugador se mueva mientras la animación esté sonando (no toca la rotación ni la cámara)
-local function freezeMovementDuringAnimation(track, token)
+-- Impide que el jugador se mueva mientras isActive() devuelva true (no toca la rotación ni la cámara)
+local function freezeMovementWhile(isActive, token)
 	stopForcedMovement()
 
 	local character, humanoid = getCharacter()
@@ -610,9 +610,9 @@ local function freezeMovementDuringAnimation(track, token)
 			or movementToken ~= forcedMovementToken
 			or not character.Parent
 			or not humanoid.Parent
-			or not track.IsPlaying then
+			or not isActive() then
 
-			-- Terminó o se interrumpió la animación: se devuelve el movimiento
+			-- Terminó o se interrumpió: se devuelve el movimiento
 			stopForcedMovement()
 			return
 		end
@@ -620,6 +620,13 @@ local function freezeMovementDuringAnimation(track, token)
 		humanoid.WalkSpeed = 0
 		humanoid:Move(Vector3.zero, false)
 	end)
+end
+
+-- Igual, pero mientras una animación esté sonando
+local function freezeMovementDuringAnimation(track, token)
+	freezeMovementWhile(function()
+		return track.IsPlaying
+	end, token)
 end
 
 ----------------------------------------------------------------
@@ -2312,7 +2319,7 @@ end
 -- Swift Sweep + Sweep Hit
 ----------------------------------------------------------------
 
-local SWEEP_DETECT_DEPTH = 3     -- cuántos studs se extiende hacia adelante (ancho y alto = tamaño del jugador)
+local SWEEP_DETECT_DEPTH = 5     -- cuántos studs se extiende hacia adelante (ancho y alto = tamaño del jugador)
 local SWEEP_DETECT_START = 0.5   -- donde empieza, desde el HumanoidRootPart (su cara frontal)
 local SWEEP_HIT_WAIT = 0.4                 -- espera antes de convertirse en Sweep Hit
 local SWEEP_HIT_HOLD_DISTANCE = 1.5        -- el otro jugador queda anclado a esta distancia, enfrente
@@ -2533,7 +2540,7 @@ local function spawnRing(position, token)
 	end)
 end
 
-local function startSweepHit(sweepTrack, victimPlayer, token)
+local function startSweepHit(sweepTrack, victimPlayer, token, moveState)
 	local character = player.Character
 	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -2543,13 +2550,19 @@ local function startSweepHit(sweepTrack, victimPlayer, token)
 	local victimTorso = victimCharacter and (victimCharacter:FindFirstChild("Torso") or victimCharacter:FindFirstChild("UpperTorso") or victimRoot)
 	if not myRoot or not victimRoot or not victimHumanoid or not victimTorso then return end
 
+	-- Animación del Sweep Hit. Se reproduce primero y se pasa a ser la "animación activa" para que el
+	-- jugador siga sin poder moverse hasta que ESTA animación termine
+	local userHitTrack = playAnimation(SWEEP_HIT_ANIM)
+	if moveState then
+		moveState.track = userHitTrack
+		moveState.pending = false
+	end
+
 	-- Se cancela SOLO la animación del Swift Sweep normal (los VFX siguen)
 	if sweepTrack then
 		sweepTrack:Stop(0.1)
 	end
 
-	-- Animación y sonido del Sweep Hit
-	playAnimation(SWEEP_HIT_ANIM)
 	playSound(SWEEP_HIT_SOUND, 0.1, token)
 
 	-- Preparar al otro jugador
@@ -2854,6 +2867,13 @@ moves["Swift Sweep"] = function(token)
 	local sweepTrack = playAnimation("16944265635")
 	playSound("16944636115", 0, token)
 
+	-- El jugador no se puede mover hasta que termine la primera animación (Swift Sweep)
+	-- o la segunda (Sweep Hit) si se convierte en Sweep Hit
+	local moveState = { track = sweepTrack, pending = false }
+	freezeMovementWhile(function()
+		return moveState.pending or (moveState.track ~= nil and moveState.track.IsPlaying)
+	end, token)
+
 	task.delay(0.1, function()
 		if token ~= sequence then return end
 		local state = { startTime = os.clock() }
@@ -2874,7 +2894,9 @@ moves["Swift Sweep"] = function(token)
 		return
 	end
 
-	-- Hay alguien en el bloque: se espera 0.4 s y se vuelve a comprobar
+	-- Hay alguien en el bloque: se espera 0.4 s y se vuelve a comprobar (el jugador sigue sin poder moverse)
+	moveState.pending = true
+
 	task.delay(SWEEP_HIT_WAIT, function()
 		local currentCharacter = player.Character
 		local currentRoot = currentCharacter and currentCharacter:FindFirstChild("HumanoidRootPart")
@@ -2889,9 +2911,12 @@ moves["Swift Sweep"] = function(token)
 		end
 
 		-- Si el otro jugador ya no está ahí, sigue el Swift Sweep normal
-		if token ~= sequence or stillThere ~= victimPlayer then return end
+		if token ~= sequence or stillThere ~= victimPlayer then
+			moveState.pending = false
+			return
+		end
 
-		startSweepHit(sweepTrack, victimPlayer, token)
+		startSweepHit(sweepTrack, victimPlayer, token, moveState)
 	end)
 end
 
@@ -3263,24 +3288,183 @@ end)
 -- Herramienta "Swift Sweep" (solo después de la animación de spawn)
 ----------------------------------------------------------------
 
+local SWIFT_SWEEP_NAME = "Swift Sweep"   -- las skills no pueden tener el mismo nombre o se bugean
+local SWIFT_SWEEP_COOLDOWN = 20
+local SWIFT_SWEEP_BURNING = false          -- efecto de fuego (KJ UFW) en la casilla de la hotbar
+
+local SWIFT_SWEEP_KEYS = {
+	["1"] = Enum.KeyCode.One,
+	["2"] = Enum.KeyCode.Two,
+	["3"] = Enum.KeyCode.Three,
+	["4"] = Enum.KeyCode.Four,
+	["5"] = Enum.KeyCode.Five,
+	["6"] = Enum.KeyCode.Six,
+	["7"] = Enum.KeyCode.Seven,
+	["8"] = Enum.KeyCode.Eight,
+	["9"] = Enum.KeyCode.Nine,
+	["0"] = Enum.KeyCode.Zero,
+}
+
+local function getHotbarBackpackGui()
+	local hotbar = playerGui:FindFirstChild("Hotbar")
+	return hotbar and hotbar:FindFirstChild("Backpack")
+end
+
+-- Busca en la hotbar del juego la casilla cuyo ToolName sea el de la skill
+local function findSwiftSweepSlotLabel()
+	local backpackGui = getHotbarBackpackGui()
+	local hotbarFrame = backpackGui and backpackGui:FindFirstChild("Hotbar")
+	if not hotbarFrame then return nil end
+
+	for _, descendant in ipairs(hotbarFrame:GetDescendants()) do
+		if descendant:IsA("TextLabel") and descendant.Name == "ToolName" and descendant.Text == SWIFT_SWEEP_NAME then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+-- Recursos de la hotbar (Cooldown, Flipbook)
+local function getHotbarAsset(name)
+	local backpackGui = getHotbarBackpackGui()
+	local hotbarScript = backpackGui and backpackGui:FindFirstChild("LocalScript")
+	return hotbarScript and hotbarScript:FindFirstChild(name)
+end
+
+-- true si el chat no está en uso (si esa GUI no existe, no se bloquea nada)
+local function isChatIdle()
+	local success, visible = pcall(function()
+		return playerGui.Chat.Frame.ChatBarParentFrame.Frame.BoxFrame.Frame.TextLabel.Visible
+	end)
+
+	if not success then
+		return true
+	end
+
+	return visible
+end
+
 local function giveSwiftSweepTool(character)
 	if not character or character ~= player.Character or not character.Parent then return end
 
 	local backpack = player:FindFirstChild("Backpack")
 	if not backpack then return end
-	if backpack:FindFirstChild("Swift Sweep") or character:FindFirstChild("Swift Sweep") then return end
+	if backpack:FindFirstChild(SWIFT_SWEEP_NAME) or character:FindFirstChild(SWIFT_SWEEP_NAME) then return end
 
 	local tool = Instance.new("Tool")
-	tool.Name = "Swift Sweep"
-	tool.ToolTip = "Swift Sweep"
+	tool.Name = SWIFT_SWEEP_NAME
 	tool.RequiresHandle = false
+	tool.ManualActivationOnly = false
 	tool.CanBeDropped = false
-
-	tool.Activated:Connect(function()
-		startMove("Swift Sweep")
-	end)
-
+	tool:SetAttribute("Regged", false)
+	tool:SetAttribute("Skill", true)
 	tool.Parent = backpack
+
+	local onCooldown = false
+	local connections = {}
+
+	local function disconnectAll()
+		for _, connection in ipairs(connections) do
+			connection:Disconnect()
+		end
+		table.clear(connections)
+	end
+
+	-- Cooldown (con la barra de la hotbar si existe)
+	local function startCooldown()
+		onCooldown = true
+
+		local label = findSwiftSweepSlotLabel()
+		local cooldownTemplate = getHotbarAsset("Cooldown")
+
+		if not label or not label.Parent or not cooldownTemplate then
+			task.delay(SWIFT_SWEEP_COOLDOWN, function()
+				onCooldown = false
+			end)
+			return
+		end
+
+		local slotButton = label.Parent
+		local cooldownBar = cooldownTemplate:Clone()
+		cooldownBar.Parent = slotButton
+
+		local cooldownTween = TweenService:Create(
+			cooldownBar,
+			TweenInfo.new(SWIFT_SWEEP_COOLDOWN),
+			{ Size = UDim2.new(1, 0, -0.12, 0) }
+		)
+		cooldownTween:Play()
+		cooldownTween.Completed:Connect(function()
+			onCooldown = false
+			cooldownBar:Destroy()
+
+			if slotButton and slotButton.Parent then
+				slotButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+				TweenService:Create(slotButton, TweenInfo.new(1), {
+					BackgroundColor3 = Color3.fromRGB(31, 31, 31),
+				}):Play()
+			end
+		end)
+	end
+
+	-- Lo que hace la skill al activarse: el Swift Sweep
+	local function activateSkill()
+		if onCooldown then return end
+		startCooldown()
+		startMove(SWIFT_SWEEP_NAME)
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		table.insert(connections, humanoid.Died:Connect(disconnectAll))
+	end
+	table.insert(connections, tool.Destroying:Connect(disconnectAll))
+
+	-- La casilla de la hotbar tarda un momento en aparecer: se espera hasta 5 s
+	task.spawn(function()
+		local label = nil
+		for _ = 1, 50 do
+			label = findSwiftSweepSlotLabel()
+			if label or not tool.Parent then break end
+			task.wait(0.1)
+		end
+
+		if not tool.Parent then return end
+
+		if label and label.Parent and label.Parent:IsA("GuiButton") then
+			local slotButton = label.Parent
+
+			if SWIFT_SWEEP_BURNING then
+				local flipbook = getHotbarAsset("Flipbook")
+				if flipbook then
+					local fire = flipbook:Clone()
+					fire.Parent = slotButton
+					local fireScript = fire:FindFirstChild("LocalScript")
+					if fireScript then
+						fireScript.Enabled = true
+					end
+				end
+			end
+
+			-- Clic en la casilla
+			table.insert(connections, slotButton.MouseButton1Click:Connect(activateSkill))
+
+			-- Tecla del número de la casilla
+			local keyName = slotButton.Parent and slotButton.Parent.Name or "5"
+			local keyCode = SWIFT_SWEEP_KEYS[keyName]
+			if keyCode then
+				table.insert(connections, UserInputService.InputBegan:Connect(function(input)
+					if input.KeyCode == keyCode and isChatIdle() then
+						activateSkill()
+					end
+				end))
+			end
+		else
+			-- Sin la hotbar personalizada: se usa la activación normal de la herramienta
+			table.insert(connections, tool.Activated:Connect(activateSkill))
+		end
+	end)
 end
 
 ----------------------------------------------------------------
