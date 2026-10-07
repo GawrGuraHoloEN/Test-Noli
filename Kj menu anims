@@ -2331,7 +2331,8 @@ local SWEEP_HIT_MESH_LIFETIME = 0.1
 local SWEEP_FOLLOWUP_TIME = 0.5            -- a los 0.5 s: FollowUpCresc desaparece y se decide el empujón
 local SWEEP_FOLLOWUP_FADE_TIME = 0.1
 local SWEEP_FOLLOWUP_ANIM = "10471478869"
-local SWEEP_KNOCKBACK_DISTANCE = 20        -- studs hacia atrás
+local SWEEP_KNOCKBACK_DISTANCE = 50        -- studs hacia atrás
+local SWEEP_DEBRIS_INTERVAL = 0.1           -- cada cuánto deja una parte de rastro mientras sale despedido
 local SWEEP_KNOCKBACK_SPEED = 70           -- studs por segundo
 local SWEEP_KNOCKBACK_PAUSE_CHECK = 0.2    -- a los 0.2 s se revisa si toca una superficie plana
 local SWEEP_KNOCKBACK_MAX_TIME = 8
@@ -2694,6 +2695,15 @@ local function startSweepHit(sweepTrack, victimPlayer, token, moveState)
 		return nil
 	end
 
+	-- Rastro de partes pequeñas (como en el Wall Combo, pero sin cráter)
+	local debrisFolder = Instance.new("Folder")
+	debrisFolder.Name = "SweepHitDebris"
+	debrisFolder.Parent = workspace
+	Debris:AddItem(debrisFolder, SWEEP_KNOCKBACK_MAX_TIME + IMPACT_KEEP_TIME + 2) -- por seguridad
+
+	local debrisIgnore = { character, victimCharacter, debrisFolder }
+	local lastDebrisTime = 0
+
 	local traveled = 0
 	local paused = false
 	local checkedPause = false
@@ -2728,6 +2738,17 @@ local function startSweepHit(sweepTrack, victimPlayer, token, moveState)
 		victimRoot.CFrame = victimRoot.CFrame + backDirection * horizontal + Vector3.new(0, vertical, 0)
 		traveled += horizontal
 
+		-- Deja un rastro de partes enterradas bajo el otro jugador, del color y material de la superficie
+		if os.clock() - lastDebrisTime >= SWEEP_DEBRIS_INTERVAL then
+			lastDebrisTime = os.clock()
+
+			local surface = findSurface(victimRoot.Position, Vector3.new(0, -1, 0), debrisIgnore)
+			if surface then
+				local color, material = getSurfaceColorAndMaterial(surface)
+				createSmallPart(debrisFolder, surface.Position, surface.Normal, color, material)
+			end
+		end
+
 		if hitWall then
 			finished = true
 		elseif paused then
@@ -2758,6 +2779,23 @@ local function startSweepHit(sweepTrack, victimPlayer, token, moveState)
 			finished = true
 		end
 	end
+
+	-- El rastro se mantiene unos segundos y luego se desvanece
+	task.delay(IMPACT_KEEP_TIME, function()
+		if not debrisFolder.Parent then return end
+
+		for _, part in ipairs(debrisFolder:GetChildren()) do
+			if part:IsA("BasePart") then
+				TweenService:Create(part, TweenInfo.new(0.6), { Transparency = 1 }):Play()
+			end
+		end
+
+		task.wait(0.6)
+
+		if debrisFolder.Parent then
+			debrisFolder:Destroy()
+		end
+	end)
 
 	if paused then
 		followTrack:AdjustSpeed(1)
