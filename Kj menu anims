@@ -3814,6 +3814,93 @@ local function listenForSpawnAnim(character)
 end
 
 ----------------------------------------------------------------
+-- Reemplazo de animaciones
+----------------------------------------------------------------
+
+local animationReplacements = {}                          -- [id original] = id de reemplazo
+local replacementTracks = setmetatable({}, { __mode = "k" }) -- tracks de reemplazo (para no procesarlos otra vez)
+local hookedAnimators = setmetatable({}, { __mode = "k" })
+
+local function getAnimationNumericId(track)
+	local animation = track.Animation
+	if not animation then return nil end
+	return string.match(animation.AnimationId, "%d+")
+end
+
+-- Reemplaza al instante una animación que se está reproduciendo en el jugador
+local function replaceTrack(animator, track)
+	if replacementTracks[track] then return end
+
+	local originalId = getAnimationNumericId(track)
+	local newId = originalId and animationReplacements[originalId]
+	if not newId then return end
+
+	-- La original se deja "reproduciéndose" pero sin peso (invisible), así el juego conserva su control
+	-- (Stopped, tiempos, etc.) y cuando la termine, el reemplazo se detiene también.
+	track:AdjustWeight(0, 0)
+
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "rbxassetid://" .. newId
+	local newTrack = animator:LoadAnimation(animation)
+	animation:Destroy()
+
+	replacementTracks[newTrack] = true
+	newTrack.Priority = track.Priority
+	newTrack:Play(0, 1, track.Speed)
+
+	track.Stopped:Connect(function()
+		if newTrack.IsPlaying then
+			newTrack:Stop(0.1)
+		end
+	end)
+end
+
+local function hookAnimationReplacement(character)
+	local humanoid = character:WaitForChild("Humanoid", 10)
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator", 10)
+	if not animator or hookedAnimators[animator] then return end
+	hookedAnimators[animator] = true
+
+	animator.AnimationPlayed:Connect(function(track)
+		replaceTrack(animator, track)
+	end)
+
+	-- Las que ya se estén reproduciendo
+	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+		replaceTrack(animator, track)
+	end
+end
+
+-- Cuando se reproduzca alguna de "idsToStop" en el jugador, se reemplaza al instante por "replacementId"
+local function handleAnimationDetection(idsToStop, replacementId)
+	for _, id in ipairs(idsToStop) do
+		animationReplacements[tostring(id)] = tostring(replacementId)
+	end
+
+	if player.Character then
+		task.spawn(hookAnimationReplacement, player.Character)
+	end
+end
+
+-- First set of animations
+handleAnimationDetection({ 10469493270 }, 17325510002)
+
+-- Second set of animations
+handleAnimationDetection({ 10469630950 }, 17325513870)
+
+-- Third set of animations
+handleAnimationDetection({ 10469639222 }, 17325522388)
+
+-- Fourth set of animations
+handleAnimationDetection({ 10469643643 }, 17325537719)
+
+player.CharacterAdded:Connect(function(character)
+	task.spawn(hookAnimationReplacement, character)
+end)
+
+----------------------------------------------------------------
 -- Personaje Eliminado & Respawneado
 ----------------------------------------------------------------
 
