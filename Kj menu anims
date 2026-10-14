@@ -3768,42 +3768,52 @@ end
 -- Reemplazo de animaciones (solo se activa cuando se reproduce la animación de spawn)
 ----------------------------------------------------------------
 
--- Function to handle animation detection and replacement
-local function handleAnimationDetection(humanoid, animIdsToStop, replacementAnimId)
-	local function onAnimPlayed(animationTrack)
-		local animId = tonumber(string.match(animationTrack.Animation.AnimationId, "%d+"))
-
-		for _, stopId in ipairs(animIdsToStop) do
-			if animId == stopId then
-				animationTrack:Stop()
-				local replacementAnimation = Instance.new("Animation")
-				replacementAnimation.AnimationId = "rbxassetid://" .. replacementAnimId
-				humanoid:LoadAnimation(replacementAnimation):Play()
-				break
-			end
-		end
-	end
-
-	humanoid.AnimationPlayed:Connect(onAnimPlayed)
-end
+-- Tabla de mapeo: [ID_A_DETENER] = ID_DE_REEMPLAZO
+local animReplacements = {
+	[10469493270] = 17325510002,
+	[10469630950] = 17325513870,
+	[10469639222] = 17325522388,
+	[10469643643] = 17325537719,
+}
 
 local animationReplacementsActive = setmetatable({}, { __mode = "k" })
 
-local function activateAnimationReplacements(humanoid)
-	if animationReplacementsActive[humanoid] then return end
-	animationReplacementsActive[humanoid] = true
+local function activateAnimationReplacements(humanoid, animator)
+	if animationReplacementsActive[animator] then return end
+	animationReplacementsActive[animator] = true
 
-	-- First set of animations
-	handleAnimationDetection(humanoid, { 10469493270 }, 17325510002)
+	-- Guardamos los AnimationTracks cargados para no crearlos múltiples veces
+	local loadedTracks = {}
 
-	-- Second set of animations
-	handleAnimationDetection(humanoid, { 10469630950 }, 17325513870)
+	-- Precargamos las animaciones de reemplazo y les asignamos prioridad máxima
+	for originalId, replacementId in pairs(animReplacements) do
+		local animObject = Instance.new("Animation")
+		animObject.AnimationId = "rbxassetid://" .. replacementId
 
-	-- Third set of animations
-	handleAnimationDetection(humanoid, { 10469639222 }, 17325522388)
+		local track = animator:LoadAnimation(animObject)
+		track.Priority = Enum.AnimationPriority.Action4 -- Prioridad máxima para evitar sobreposición
 
-	-- Fourth set of animations
-	handleAnimationDetection(humanoid, { 10469643643 }, 17325537719)
+		loadedTracks[originalId] = track
+	end
+
+	-- Detectar la animación cuando inicia
+	animator.AnimationPlayed:Connect(function(animationTrack)
+		if not animationTrack.Animation then return end
+
+		local rawId = animationTrack.Animation.AnimationId
+		local animId = tonumber(string.match(rawId, "%d+"))
+
+		if animId and loadedTracks[animId] then
+			-- 1. Detener la animación original de forma INMEDIATA (fadeTime = 0)
+			animationTrack:Stop(0)
+
+			-- 2. Reproducir el reemplazo sin tiempo de transición inicial para que sea instantáneo
+			local newTrack = loadedTracks[animId]
+			if not newTrack.IsPlaying then
+				newTrack:Play(0)
+			end
+		end
+	end)
 end
 
 local function listenForSpawnAnim(character)
@@ -3834,7 +3844,7 @@ local function listenForSpawnAnim(character)
 		playCustomSpawn(character, humanoid, animator)
 
 		-- Desde ahora se reemplazan las animaciones indicadas
-		activateAnimationReplacements(humanoid)
+		activateAnimationReplacements(humanoid, animator)
 	end
 
 	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
