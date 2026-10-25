@@ -3270,56 +3270,77 @@ end
 
 task.spawn(function()
 	task.wait(1)
-	
-	local topbarPlus = playerGui:WaitForChild("TopbarPlus", 5)
-	if not topbarPlus then return end
-	local topbarContainer = topbarPlus:WaitForChild("TopbarContainer", 5)
-	if not topbarContainer then return end
-	local unnamedIcon = topbarContainer:WaitForChild("UnnamedIcon", 5)
-	if not unnamedIcon then return end
-	local dropdownContainer = unnamedIcon:WaitForChild("DropdownContainer", 5)
-	if not dropdownContainer then return end
-	local dropdownFrame = dropdownContainer:WaitForChild("DropdownFrame", 5)
-	if not dropdownFrame then return end
-	
-	local originalKJFrame = dropdownFrame:FindFirstChild("KJ")
-	if originalKJFrame then
-		local clonedKJ = originalKJFrame:Clone()
-		clonedKJ.Visible = true
-		clonedKJ.Parent = dropdownFrame
-		
-		local function onClonedKjClicked()
-			if hasCustomSpawnPlayed then
-				showNotification("You're already using this character.")
-			else
-				pcall(function()
-					local bald = dropdownFrame:FindFirstChild("Bald")
-					if not bald then return end
-					local iconBtn = bald:FindFirstChild("IconButton")
-					if iconBtn then
-						if getconnections then
-							for _, connection in pairs(getconnections(iconBtn.MouseButton1Click)) do
-								connection:Fire()
-							end
-							for _, connection in pairs(getconnections(iconBtn.Activated)) do
-								connection:Fire()
-							end
+
+	-- game.Players.LocalPlayer.PlayerGui.TopbarStandardClipped.ClippedContainer.Dropdown.DropdownScroller.KJ
+	local topbar = playerGui:WaitForChild("TopbarStandardClipped", 10)
+	if not topbar then return end
+	local clippedContainer = topbar:WaitForChild("ClippedContainer", 5)
+	if not clippedContainer then return end
+	local dropdown = clippedContainer:WaitForChild("Dropdown", 5)
+	if not dropdown then return end
+	local dropdownScroller = dropdown:WaitForChild("DropdownScroller", 5)
+	if not dropdownScroller then return end
+
+	local hookedFrames = setmetatable({}, { __mode = "k" })
+
+	local function onKjClicked()
+		if hasCustomSpawnPlayed then
+			showNotification("You're already using this character.")
+		else
+			pcall(function()
+				local bald = dropdownScroller:FindFirstChild("Bald")
+				if not bald then return end
+				local iconBtn = bald:FindFirstChild("IconButton")
+				if iconBtn then
+					if getconnections then
+						for _, connection in pairs(getconnections(iconBtn.MouseButton1Click)) do
+							connection:Fire()
 						end
-						GuiService.SelectedObject = iconBtn
+						for _, connection in pairs(getconnections(iconBtn.Activated)) do
+							connection:Fire()
+						end
 					end
-				end)
-			end
-		end
-		
-		if clonedKJ:IsA("GuiButton") then
-			clonedKJ.Activated:Connect(onClonedKjClicked)
-		end
-		
-		local iconButton = clonedKJ:FindFirstChild("IconButton")
-		if iconButton and iconButton:IsA("GuiButton") then
-			iconButton.Activated:Connect(onClonedKjClicked)
+					GuiService.SelectedObject = iconBtn
+				end
+			end)
 		end
 	end
+
+	-- En lugar de copiar el frame, se usa el KJ original: se hace visible y se vigila para que siempre lo esté
+	local function hookKJFrame(kjFrame)
+		if hookedFrames[kjFrame] then return end
+		hookedFrames[kjFrame] = true
+
+		kjFrame.Visible = true
+
+		-- Si algo lo hace invisible, se vuelve a hacer visible
+		kjFrame:GetPropertyChangedSignal("Visible"):Connect(function()
+			if not kjFrame.Visible then
+				kjFrame.Visible = true
+			end
+		end)
+
+		if kjFrame:IsA("GuiButton") then
+			kjFrame.Activated:Connect(onKjClicked)
+		end
+
+		local iconButton = kjFrame:FindFirstChild("IconButton")
+		if iconButton and iconButton:IsA("GuiButton") then
+			iconButton.Activated:Connect(onKjClicked)
+		end
+	end
+
+	local kjFrame = dropdownScroller:FindFirstChild("KJ")
+	if kjFrame then
+		hookKJFrame(kjFrame)
+	end
+
+	-- Si el juego lo elimina y lo vuelve a crear, también se vigila el nuevo
+	dropdownScroller.ChildAdded:Connect(function(child)
+		if child.Name == "KJ" then
+			hookKJFrame(child)
+		end
+	end)
 end)
 
 ----------------------------------------------------------------
