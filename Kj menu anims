@@ -3283,14 +3283,23 @@ task.spawn(function()
 
 	local hookedFrames = setmetatable({}, { __mode = "k" })
 
+	-- Ruta del botón: <frame>.IconButton.Menu.IconSpot.ClickRegion
+	local function getClickRegion(frame)
+		local region = frame
+			and frame:FindFirstChild("IconButton")
+			and frame.IconButton:FindFirstChild("Menu")
+			and frame.IconButton.Menu:FindFirstChild("IconSpot")
+			and frame.IconButton.Menu.IconSpot:FindFirstChild("ClickRegion")
+		return region
+	end
+
 	local function onKjClicked()
 		if hasCustomSpawnPlayed then
 			showNotification("You're already using this character.")
 		else
 			pcall(function()
-				local bald = dropdownScroller:FindFirstChild("Bald")
-				if not bald then return end
-				local iconBtn = bald:FindFirstChild("IconButton")
+				-- ...DropdownScroller.Bald.IconButton.Menu.IconSpot.ClickRegion
+				local iconBtn = getClickRegion(dropdownScroller:FindFirstChild("Bald"))
 				if iconBtn then
 					if getconnections then
 						for _, connection in pairs(getconnections(iconBtn.MouseButton1Click)) do
@@ -3320,14 +3329,19 @@ task.spawn(function()
 			end
 		end)
 
-		if kjFrame:IsA("GuiButton") then
-			kjFrame.Activated:Connect(onKjClicked)
-		end
+		-- ...DropdownScroller.KJ.IconButton.Menu.IconSpot.ClickRegion (puede tardar en aparecer)
+		task.spawn(function()
+			local button = nil
+			for _ = 1, 50 do
+				button = getClickRegion(kjFrame)
+				if button or not kjFrame.Parent then break end
+				task.wait(0.1)
+			end
 
-		local iconButton = kjFrame:FindFirstChild("IconButton")
-		if iconButton and iconButton:IsA("GuiButton") then
-			iconButton.Activated:Connect(onKjClicked)
-		end
+			if button and button:IsA("GuiButton") then
+				button.Activated:Connect(onKjClicked)
+			end
+		end)
 	end
 
 	local kjFrame = dropdownScroller:FindFirstChild("KJ")
