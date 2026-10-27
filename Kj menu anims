@@ -951,6 +951,43 @@ end
 -- VFX
 ----------------------------------------------------------------
 
+-- Duplicados extra por VFX: [nombre del VFX] = { { nombre a buscar (a cualquier profundidad), copias }, ... }
+local VFX_DUPLICATES = {
+	["fine...Emit"] = {
+		{ "EmitBatch1", 5 },
+		{ "smoksmok", 9 },
+	},
+	["fine...Emit2"] = {
+		{ "smoksmok19201029329310923012932019301293019", 9 },
+	},
+}
+
+-- Busca profundamente cada nombre dentro del VFX y lo duplica (los duplicados quedan junto al original)
+local function duplicateInsideVfx(object, vfxName)
+	local rules = VFX_DUPLICATES[vfxName]
+	if not rules then return end
+
+	for _, rule in ipairs(rules) do
+		local targetName, copies = rule[1], rule[2]
+
+		-- Se recogen primero para no duplicar los duplicados
+		local found = {}
+		for _, descendant in ipairs(object:GetDescendants()) do
+			if descendant.Name == targetName then
+				table.insert(found, descendant)
+			end
+		end
+
+		for _, original in ipairs(found) do
+			if original.Parent then
+				for _ = 1, copies do
+					original:Clone().Parent = original.Parent
+				end
+			end
+		end
+	end
+end
+
 local function emitVfx(name, lifetime, token)
 	if token ~= sequence then return nil end
 
@@ -975,6 +1012,9 @@ local function emitVfx(name, lifetime, token)
 
 	table.insert(currentVfx, object)
 	Debris:AddItem(object, lifetime)
+
+	-- Duplicar los objetos indicados cuando el VFX aparece (antes de emitir)
+	duplicateInsideVfx(object, name)
 
 	for _, emitter in ipairs(object:GetDescendants()) do
 		if emitter:IsA("ParticleEmitter") then
